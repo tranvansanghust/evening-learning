@@ -1,0 +1,258 @@
+DATABASE RELATIONSHIP DIAGRAM
+=============================
+
+                              ┌─────────────────────┐
+                              │       users         │
+                              ├─────────────────────┤
+                              │ user_id (PK)        │
+                              │ telegram_id (UQ)    │
+                              │ username            │
+                              │ level (0-3)         │
+                              │ created_at          │
+                              │ updated_at          │
+                              └──────────┬──────────┘
+                                         │
+                    ┌────────────────────┼────────────────────┐
+                    │                    │                    │
+                    │ 1:M                │ 1:M                │ 1:M
+                    │                    │                    │
+        ┌───────────▼──────────┐  ┌──────▼───────────┐  ┌────▼──────────────┐
+        │   user_courses       │  │  quiz_sessions   │  │  quiz_answers*    │
+        ├──────────────────────┤  ├──────────────────┤  ├───────────────────┤
+        │ user_course_id (PK)  │  │ session_id (PK)  │  │ answer_id (PK)    │
+        │ user_id (FK)         │  │ user_id (FK)     │  │ session_id (FK)   │
+        │ course_id (FK) ◄─┐   │  │ lesson_id (FK) ◄─┼──┼──┐ concept_id (FK)│
+        │ status              │  │ status           │  │ question          │
+        │ started_at          │  │ messages (JSON)  │  │ user_answer       │
+        │ completed_at        │  │ started_at       │  │ is_correct        │
+        └───────────┬─────────┘  │ completed_at     │  │ engagement_level  │
+                    │             └──────┬──────────┘  │ created_at        │
+                    │                    │             └─────┬─────────────┘
+                    │                    │                   │
+                    │            ┌───────▼────────┐         │
+                    │            │  quiz_summary  │         │
+                    │            ├────────────────┤         │
+                    │ M:1 ◄──────┤ summary_id(PK) │         │
+                    │            │ session_id(FK)│         │
+                    │            │user_course(FK)│         │
+                    │            │concepts_maste │         │
+                    │            │concepts_weak  │         │
+                    │            │ created_at    │         │
+                    │            └────────────────┘         │
+                    │                                       │
+        ┌───────────▼──────────────────────┐                │
+        │         courses                  │                │
+        ├────────────────────────────────────┤                │
+        │ course_id (PK)                     │ 1:M           │
+        │ name                               │                │
+        │ description                        │                │
+        │ source                             │                │
+        │ source_id                          │                │
+        │ total_lessons                      │                │
+        │ created_at                         │                │
+        └────────────┬────────────────────────┘                │
+                     │                                         │
+                     │ 1:M                                     │
+                     │                                         │
+        ┌────────────▼──────────────┐                          │
+        │       lessons             │                          │
+        ├──────────────────────────────┤                       │
+        │ lesson_id (PK)               │ 1:M                   │
+        │ course_id (FK)               │                       │
+        │ sequence_number              │                       │
+        │ title                        │                       │
+        │ description                  │                       │
+        │ content_url                  │                       │
+        │ estimated_duration_minutes   │                       │
+        └────────────┬────────────────┘                        │
+                     │                                         │
+                     │ 1:M                                     │
+                     │                                         │
+        ┌────────────▼──────────────┐                          │
+        │      concepts             │                          │
+        ├──────────────────────────────┤                       │
+        │ concept_id (PK)              │ 1:M                   │
+        │ lesson_id (FK)               │                       │
+        │ name                         │                       │
+        │ description                  │◄──────────────────────┘
+        └──────────────────────────────┘
+
+
+KEY RELATIONSHIPS
+=================
+
+1. User → UserCourse (1:M)
+   One user can enroll in many courses
+
+2. Course → UserCourse (1:M)
+   One course can have many users enrolled
+
+3. Course → Lesson (1:M)
+   One course contains many lessons (ordered by sequence_number)
+
+4. Lesson → Concept (1:M)
+   One lesson teaches many concepts
+
+5. User → QuizSession (1:M)
+   One user can have many quiz sessions
+
+6. Lesson → QuizSession (1:M)
+   One lesson can have many quiz sessions (from different users)
+
+7. QuizSession → QuizAnswer (1:M)
+   One session contains many Q&A pairs
+
+8. Concept → QuizAnswer (1:M)
+   One concept can be tested in many answers
+
+9. QuizSession → QuizSummary (1:1)
+   Each session produces one summary after completion
+
+10. UserCourse → QuizSummary (1:M)
+    One enrollment can have multiple quiz summaries
+
+
+CASCADE DELETE RULES
+====================
+
+users.user_id →
+  - user_courses (delete cascade)
+  - quiz_sessions (delete cascade)
+  - quiz_answers (delete cascade)
+
+courses.course_id →
+  - user_courses (delete cascade)
+  - lessons (delete cascade)
+
+lessons.lesson_id →
+  - concepts (delete cascade)
+  - quiz_sessions (delete cascade)
+
+user_courses.user_course_id →
+  - quiz_summaries (delete cascade)
+
+quiz_sessions.session_id →
+  - quiz_answers (delete cascade)
+  - quiz_summaries (delete cascade)
+
+concepts.concept_id →
+  - quiz_answers (delete cascade)
+
+
+QUERY PATTERNS
+==============
+
+Get User with All Courses:
+  User.query.options(joinedload(User.user_courses)).filter(...)
+
+Get Course with All Lessons and Concepts:
+  Course.query.options(
+    joinedload(Course.lessons)
+    .joinedload(Lesson.concepts)
+  ).filter(...)
+
+Get QuizSession with All Answers and Summary:
+  QuizSession.query.options(
+    joinedload(QuizSession.quiz_answers),
+    joinedload(QuizSession.quiz_summary)
+  ).filter(...)
+
+Get User's Progress:
+  user.user_courses  # All enrollments with status
+  quiz_session.quiz_summary  # Mastered and weak concepts
+  quiz_session.messages  # Full conversation history
+
+Get All Answers for a Concept:
+  Concept.query.options(
+    joinedload(Concept.quiz_answers)
+  ).filter(...)
+
+
+INDEXES FOR PERFORMANCE
+=======================
+
+Primary Key Indexes (Automatic):
+  users.user_id
+  courses.course_id
+  user_courses.user_course_id
+  lessons.lesson_id
+  concepts.concept_id
+  quiz_sessions.session_id
+  quiz_answers.answer_id
+  quiz_summaries.summary_id
+
+Unique Indexes:
+  users.telegram_id
+  quiz_summaries.session_id
+
+Foreign Key Indexes:
+  user_courses.user_id
+  user_courses.course_id
+  lessons.course_id
+  concepts.lesson_id
+  quiz_sessions.user_id
+  quiz_sessions.lesson_id
+  quiz_answers.session_id
+  quiz_answers.concept_id
+  quiz_summaries.user_course_id
+
+Composite Indexes:
+  courses (source, source_id) - for external platform lookups
+  lessons (course_id, sequence_number) - for ordered retrieval
+  
+Filter Indexes:
+  user_courses.status - for enrollment filtering
+  quiz_sessions.status - for active session queries
+  quiz_sessions.started_at - for timeline queries
+  quiz_answers.is_correct - for mastery tracking
+  quiz_summaries.created_at - for summary timeline
+
+
+JSON FIELD STRUCTURES
+=====================
+
+quiz_sessions.messages:
+  [
+    {
+      "role": "bot" | "user",
+      "content": "message text"
+    },
+    ...
+  ]
+
+quiz_summaries.concepts_mastered:
+  ["concept1", "concept2", ...]
+
+quiz_summaries.concepts_weak:
+  [
+    {
+      "concept": "concept_name",
+      "user_answer": "what student said",
+      "correct_explanation": "explanation"
+    },
+    ...
+  ]
+
+
+TRANSACTION PATTERNS
+====================
+
+Create Full Quiz Flow:
+  1. Create QuizSession
+  2. Append messages as quiz progresses
+  3. Create QuizAnswer for each Q&A pair
+  4. Close QuizSession (status = completed)
+  5. Generate and create QuizSummary
+  All in single transaction
+
+Update User Progress:
+  1. Query UserCourse
+  2. Update status and completed_at
+  3. Update User.level if needed
+  Atomic transaction
+
+Enroll User in Course:
+  1. Create UserCourse
+  2. Commit to establish relationship
+  Ready for quiz sessions
+
