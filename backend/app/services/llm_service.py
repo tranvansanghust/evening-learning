@@ -14,7 +14,7 @@ from typing import List, Optional, Dict, Any
 from enum import Enum
 
 from pydantic import BaseModel, Field
-from anthropic import Anthropic, APIError, RateLimitError, APITimeoutError
+from openai import OpenAI, APIError, RateLimitError, APITimeoutError
 
 from app.services.llm_prompts import LLMPrompts
 
@@ -102,22 +102,21 @@ class CourseSuggestion(BaseModel):
 
 class LLMService:
     """
-    Service for managing all AI interactions with Claude API.
+    Service for managing all AI interactions via OpenAI-compatible API.
 
     Handles quiz generation, evaluation, summarization, and recommendations.
-    Uses claude-haiku-4-5 for simple tasks and claude-sonnet-4-6 for complex ones.
+    Supports any OpenAI-compatible endpoint (OpenAI, OpenRouter, local models, etc.).
     """
 
-    # Model selections
-    FAST_MODEL = "claude-haiku-4-5-20251001"  # Fast, cheap model for simple tasks
-    SMART_MODEL = "claude-sonnet-4-6-20250514"  # Smarter model for complex analysis
-
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, base_url: str, fast_model: str, smart_model: str):
         """
-        Initialize the LLMService with API credentials.
+        Initialize the LLMService with custom API credentials.
 
         Args:
-            api_key: Anthropic API key
+            api_key: API key for the LLM provider
+            base_url: Base URL of the OpenAI-compatible API
+            fast_model: Model name for fast/cheap tasks
+            smart_model: Model name for complex tasks
 
         Raises:
             ValueError: If api_key is empty
@@ -125,8 +124,10 @@ class LLMService:
         if not api_key or not api_key.strip():
             raise ValueError("API key cannot be empty")
 
-        self.client = Anthropic(api_key=api_key)
-        logger.info("LLMService initialized with Anthropic API")
+        self.FAST_MODEL = fast_model
+        self.SMART_MODEL = smart_model
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        logger.info(f"LLMService initialized (base_url={base_url}, fast={fast_model}, smart={smart_model})")
 
     def generate_quiz_question(
         self,
@@ -176,7 +177,7 @@ class LLMService:
         )
 
         try:
-            message = self.client.messages.create(
+            message = self.client.chat.completions.create(
                 model=self.FAST_MODEL,
                 max_tokens=500,
                 messages=[
@@ -184,7 +185,7 @@ class LLMService:
                 ]
             )
 
-            question = message.content[0].text.strip()
+            question = message.choices[0].message.content.strip()
             logger.info(f"Generated quiz question (first={is_first_question}, concepts={len(concepts)})")
             return question
 
@@ -247,7 +248,7 @@ class LLMService:
         )
 
         try:
-            message = self.client.messages.create(
+            message = self.client.chat.completions.create(
                 model=self.SMART_MODEL,
                 max_tokens=500,
                 messages=[
@@ -255,7 +256,7 @@ class LLMService:
                 ]
             )
 
-            response_text = message.content[0].text.strip()
+            response_text = message.choices[0].message.content.strip()
             evaluation_dict = json.loads(response_text)
 
             evaluation = AnswerEvaluation(
@@ -325,7 +326,7 @@ class LLMService:
         )
 
         try:
-            message = self.client.messages.create(
+            message = self.client.chat.completions.create(
                 model=self.FAST_MODEL,
                 max_tokens=500,
                 messages=[
@@ -333,7 +334,7 @@ class LLMService:
                 ]
             )
 
-            response_text = message.content[0].text.strip()
+            response_text = message.choices[0].message.content.strip()
             decision_dict = json.loads(response_text)
 
             action = NextAction(
@@ -400,7 +401,7 @@ class LLMService:
         )
 
         try:
-            message = self.client.messages.create(
+            message = self.client.chat.completions.create(
                 model=self.SMART_MODEL,
                 max_tokens=1000,
                 messages=[
@@ -408,7 +409,7 @@ class LLMService:
                 ]
             )
 
-            response_text = message.content[0].text.strip()
+            response_text = message.choices[0].message.content.strip()
             summary_dict = json.loads(response_text)
 
             # Parse weak concepts with nested structure
@@ -495,7 +496,7 @@ class LLMService:
         )
 
         try:
-            message = self.client.messages.create(
+            message = self.client.chat.completions.create(
                 model=self.SMART_MODEL,
                 max_tokens=800,
                 messages=[
@@ -503,7 +504,7 @@ class LLMService:
                 ]
             )
 
-            response_text = message.content[0].text.strip()
+            response_text = message.choices[0].message.content.strip()
             suggestions_dict = json.loads(response_text)
 
             suggestions = [

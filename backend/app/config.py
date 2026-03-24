@@ -28,8 +28,11 @@ class Settings(BaseSettings):
     telegram_bot_token: str = "8618965675:AAHr3z_bsDl8iJ7Glq8VadtneJo2LlGVnbA"
     telegram_webhook_url: str = ""
 
-    # Claude API Configuration
-    anthropic_api_key: str = ""
+    # LLM Configuration (OpenAI-compatible)
+    llm_base_url: str = "https://api.openai.com/v1"
+    llm_api_key: str = ""
+    llm_fast_model: str = "gpt-4o-mini"
+    llm_smart_model: str = "gpt-4o"
 
     # FastAPI Configuration
     api_host: str = "0.0.0.0"
@@ -53,6 +56,7 @@ class Settings(BaseSettings):
         return (
             f"mysql+pymysql://{self.db_user}:{self.db_password}"
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
+            f"?ssl_disabled=true"
         )
 
 

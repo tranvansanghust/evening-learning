@@ -75,17 +75,14 @@ async def health_check() -> dict:
     }
 
 
-from app.routers import telegram, onboarding, learning, quiz
-
-# TODO: Router imports will be added here when other agents create them
-# from app.routers import progress
+from app.routers import telegram, onboarding, learning, quiz, progress
 
 
 def include_routers() -> None:
     """
     Include all API routers after they are created.
 
-    This function will be updated to import and include routers from:
+    This function includes routers from:
     - app.routers.onboarding: Onboarding flow endpoints
     - app.routers.learning: Learning flow endpoints
     - app.routers.quiz: Quiz and evaluation endpoints
@@ -101,11 +98,11 @@ def include_routers() -> None:
     # Include Quiz router
     app.include_router(quiz.router, prefix="/api/quiz", tags=["Quiz"])
 
+    # Include Progress router
+    app.include_router(progress.router, prefix="/api", tags=["Progress"])
+
     # Include Telegram webhook router
     app.include_router(telegram.router, tags=["Telegram Webhook"])
-
-    # Router includes will be added here as other services are created
-    # app.include_router(progress.router, prefix="/api", tags=["Progress"])
 
 
 # Include routers when this module is loaded
