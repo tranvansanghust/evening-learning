@@ -66,11 +66,11 @@ class OnboardingState(Base):
     # Relationships
     user = relationship(
         "User",
-        lazy="joined"
+        lazy="select"
     )
     course = relationship(
         "Course",
-        lazy="joined"
+        lazy="select"
     )
 
     # Indexes

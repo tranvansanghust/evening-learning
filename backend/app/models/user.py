@@ -47,7 +47,7 @@ class User(Base):
         "UserCourse",
         back_populates="user",
         cascade="all, delete-orphan",
-        lazy="joined"
+        lazy="select"
     )
     quiz_sessions = relationship(
         "QuizSession",

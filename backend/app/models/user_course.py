@@ -49,12 +49,12 @@ class UserCourse(Base):
     user = relationship(
         "User",
         back_populates="user_courses",
-        lazy="joined"
+        lazy="select"
     )
     course = relationship(
         "Course",
         back_populates="user_courses",
-        lazy="joined"
+        lazy="select"
     )
     quiz_summaries = relationship(
         "QuizSummary",

@@ -59,12 +59,12 @@ class QuizSummary(Base):
     quiz_session = relationship(
         "QuizSession",
         back_populates="quiz_summary",
-        lazy="joined"
+        lazy="select"
     )
     user_course = relationship(
         "UserCourse",
         back_populates="quiz_summaries",
-        lazy="joined"
+        lazy="select"
     )
 
     # Indexes

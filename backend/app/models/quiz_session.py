@@ -56,12 +56,12 @@ class QuizSession(Base):
     user = relationship(
         "User",
         back_populates="quiz_sessions",
-        lazy="joined"
+        lazy="select"
     )
     lesson = relationship(
         "Lesson",
         back_populates="quiz_sessions",
-        lazy="joined"
+        lazy="select"
     )
     quiz_answers = relationship(
         "QuizAnswer",
@@ -74,7 +74,7 @@ class QuizSession(Base):
         back_populates="quiz_session",
         uselist=False,
         cascade="all, delete-orphan",
-        lazy="joined"
+        lazy="select"
     )
 
     # Indexes

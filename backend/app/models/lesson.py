@@ -51,7 +51,7 @@ class Lesson(Base):
     course = relationship(
         "Course",
         back_populates="lessons",
-        lazy="joined"
+        lazy="select"
     )
     concepts = relationship(
         "Concept",

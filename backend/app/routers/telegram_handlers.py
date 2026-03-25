@@ -42,18 +42,40 @@ router = Router()
 
 @router.message(Command("start"))
 async def cmd_start(message: Message) -> None:
+    from app.models import User
+
     telegram_id = str(message.from_user.id)
     username = message.from_user.username or f"user_{telegram_id}"
 
     db = SessionLocal()
     try:
         onboarding_service = OnboardingService(db)
-        try:
-            user = onboarding_service.create_user(
-                telegram_id=telegram_id,
-                username=username
-            )
+
+        # Tìm hoặc tạo user
+        user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        if not user:
+            user = onboarding_service.create_user(telegram_id=telegram_id, username=username)
             logger.info(f"Created user {user.user_id} for telegram_id {telegram_id}")
+
+        # Kiểm tra onboarding state
+        ob_state = onboarding_service.get_onboarding_state(user.user_id)
+
+        if ob_state is not None:
+            # Đang giữa chừng onboarding → tiếp tục từ bước hiện tại
+            logger.info(f"User {user.user_id} resuming onboarding at step: {ob_state.current_step}")
+            await message.answer(
+                f"👋 Chào lại {username}! Bạn đang onboarding dở, tiếp tục nhé.\n\n"
+                "Bạn muốn học gì?\n"
+                "(Paste link Udemy hoặc gõ tên chủ đề)"
+            )
+        else:
+            # Chưa có state → bắt đầu onboarding mới
+            logger.info(f"Creating onboarding state for user {user.user_id}")
+            onboarding_service.create_onboarding_state(user.user_id)
+            onboarding_service.update_onboarding_state(
+                user_id=user.user_id, current_step="course_input"
+            )
+            logger.info(f"Onboarding state created for user {user.user_id}, step=course_input")
             await message.answer(
                 f"👋 Chào {username}! Mình là học bạn AI của bạn 🤖\n\n"
                 "Mình giúp bạn:\n"
@@ -63,18 +85,8 @@ async def cmd_start(message: Message) -> None:
                 "Bạn muốn học gì?\n"
                 "(Paste link Udemy hoặc gõ tên chủ đề)"
             )
-        except ValueError:
-            # User already exists
-            logger.info(f"User {telegram_id} already exists, sending welcome back")
-            await message.answer(
-                "👋 Bạn đã có tài khoản rồi!\n\n"
-                "Hãy sử dụng các lệnh:\n"
-                "/progress - Xem tiến độ học tập\n"
-                "/review - Xem các quiz đã làm\n"
-                "/done - Hoàn thành bài học"
-            )
     except Exception as e:
-        logger.error(f"Error in cmd_start for telegram_id {telegram_id}: {e}")
+        logger.error(f"Error in cmd_start for telegram_id {telegram_id}: {e}", exc_info=True)
         await message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại sau!")
     finally:
         db.close()
@@ -133,10 +145,176 @@ async def cmd_help(message: Message) -> None:
 
 @router.message()
 async def handle_text(message: Message) -> None:
-    await message.answer(
-        "💭 Tin nhắn của bạn đã được nhận!\n\n"
-        "Vui lòng sử dụng các lệnh có sẵn. Gõ /help để xem danh sách."
+    from app.models import User, QuizSession
+
+    telegram_id = str(message.from_user.id)
+    text = (message.text or "").strip()
+
+    db = SessionLocal()
+    try:
+        onboarding_service = OnboardingService(db)
+
+        # Lấy user từ telegram_id
+        user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        user_id = user.user_id if user else None
+
+        # Ưu tiên 1: đang trong onboarding
+        ob_state = onboarding_service.get_onboarding_state(user_id)
+        if ob_state is not None:
+            await _handle_onboarding_step(message, text, user_id, ob_state, onboarding_service)
+            return
+
+        # Ưu tiên 2: đang trong quiz
+        active_session = db.query(QuizSession).filter(
+            QuizSession.user_id == user_id,
+            QuizSession.status == "active",
+        ).first() if user_id else None
+        if active_session is not None:
+            await _handle_quiz_answer(message, text, active_session, db)
+            return
+
+        # Fallback
+        await message.answer(
+            "Gõ /start để bắt đầu học nhé! 👋\n\n"
+            "Hoặc dùng các lệnh:\n"
+            "/progress - Tiến độ học tập\n"
+            "/review - Xem quiz đã làm"
+        )
+    except Exception as e:
+        logger.error(f"Error in handle_text for {telegram_id}: {e}")
+        await message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại!")
+    finally:
+        db.close()
+
+
+async def _handle_onboarding_step(
+    message: Message,
+    text: str,
+    user_id: int,
+    ob_state,
+    onboarding_service: OnboardingService,
+) -> None:
+    """Route tin nhắn đến đúng bước onboarding."""
+    from datetime import date, timedelta
+
+    step = ob_state.current_step
+
+    if step == "course_input":
+        onboarding_service.detect_course_from_input(text)
+        onboarding_service.update_onboarding_state(
+            user_id=user_id, current_step="q1"
+        )
+        await message.answer(
+            "Bạn đã từng xây dựng web app chưa?\n\n"
+            "Trả lời: có / chưa"
+        )
+
+    elif step == "q1":
+        answer = "never" if any(w in text.lower() for w in ["chưa", "không", "never", "no"]) else "yes"
+        onboarding_service.update_onboarding_state(
+            user_id=user_id, q1_answer=answer, current_step="q2"
+        )
+        if answer == "never":
+            await message.answer("Bạn có biết HTML/CSS chưa?\n\nTrả lời: có / chưa")
+        else:
+            await message.answer("Bạn đã dùng framework nào khác như React, Vue chưa?\n\nTrả lời: có / chưa")
+
+    elif step == "q2":
+        answer = "no" if any(w in text.lower() for w in ["chưa", "không", "never", "no"]) else "yes"
+        onboarding_service.update_onboarding_state(
+            user_id=user_id, q2_answer=answer, current_step="deadline"
+        )
+        await message.answer(
+            "Bạn muốn hoàn thành khoá học trong bao lâu?\n\n"
+            "Ví dụ: 1 month, 3 months, 2026-06-01"
+        )
+
+    elif step == "deadline":
+        deadline = _parse_deadline(text)
+        onboarding_service.update_onboarding_state(
+            user_id=user_id, deadline=deadline, current_step="hours"
+        )
+        await message.answer("Mỗi ngày bạn có thể học bao nhiêu giờ?\n\nVí dụ: 1, 2, 3")
+
+    elif step == "hours":
+        try:
+            hours = int("".join(filter(str.isdigit, text)) or "1")
+        except ValueError:
+            hours = 1
+        onboarding_service.update_onboarding_state(
+            user_id=user_id, hours_per_day=hours, current_step="reminder"
+        )
+        await message.answer("Bạn muốn nhận nhắc nhở lúc mấy giờ?\n\nVí dụ: 20:00, 21:30")
+
+    elif step == "reminder":
+        reminder_time = text.strip()
+        onboarding_service.update_onboarding_state(
+            user_id=user_id, reminder_time=reminder_time
+        )
+        onboarding_service.complete_onboarding(user_id)
+        await message.answer(
+            "Onboarding hoàn thành! Bắt đầu học thôi 🚀\n\n"
+            "Dùng /today để xem bài học đầu tiên."
+        )
+
+    else:
+        await message.answer("Gõ /help để xem các lệnh có sẵn.")
+
+
+def _parse_deadline(text: str):
+    """Parse deadline từ text: '3 months', '1 month', hoặc 'YYYY-MM-DD'."""
+    from datetime import date, timedelta
+    import re
+
+    text = text.lower().strip()
+
+    # "N months"
+    m = re.search(r"(\d+)\s*month", text)
+    if m:
+        months = int(m.group(1))
+        return date.today() + timedelta(days=months * 30)
+
+    # "N weeks"
+    m = re.search(r"(\d+)\s*week", text)
+    if m:
+        weeks = int(m.group(1))
+        return date.today() + timedelta(weeks=weeks)
+
+    # "YYYY-MM-DD"
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", text)
+    if m:
+        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+    # Default: 3 months
+    return date.today() + timedelta(days=90)
+
+
+async def _handle_quiz_answer(message: Message, text: str, active_session, db) -> None:
+    """Xử lý câu trả lời quiz, gửi feedback và câu tiếp theo hoặc tổng kết."""
+    quiz_service = QuizService(db)
+    result = quiz_service.submit_answer(
+        session_id=active_session.session_id,
+        user_answer=text,
+        db_session=db,
     )
+
+    evaluation = result.get("evaluation", {})
+    feedback = evaluation.get("feedback", "")
+    next_action = result.get("next_action", "continue")
+
+    if feedback:
+        await message.answer(feedback)
+
+    if next_action == "end":
+        summary = result.get("summary", "")
+        await message.answer(
+            f"Quiz hoàn thành! ✅\n\n{summary}" if summary
+            else "Quiz hoàn thành! ✅\n\nDùng /progress để xem tiến độ."
+        )
+    else:
+        next_question = result.get("next_question", "")
+        if next_question:
+            await message.answer(next_question)
 
 
 class TelegramHandlers:

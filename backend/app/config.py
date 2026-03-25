@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     # FastAPI Configuration
     api_host: str = "0.0.0.0"
     api_port: int = 8000
-    debug: bool = True
+    debug: bool = False
 
     class Config:
         """Pydantic config for settings loading."""

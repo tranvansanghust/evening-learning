@@ -55,12 +55,12 @@ class QuizAnswer(Base):
     session = relationship(
         "QuizSession",
         back_populates="quiz_answers",
-        lazy="joined"
+        lazy="select"
     )
     concept = relationship(
         "Concept",
         back_populates="quiz_answers",
-        lazy="joined"
+        lazy="select"
     )
 
     # Indexes
