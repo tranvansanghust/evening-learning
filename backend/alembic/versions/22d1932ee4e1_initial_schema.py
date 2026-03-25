@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: 0447d0a4c3e6
+Revision ID: 22d1932ee4e1
 Revises: 
-Create Date: 2026-03-24 10:38:06.372079
+Create Date: 2026-03-24 17:25:38.128753
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = '0447d0a4c3e6'
+revision: str = '22d1932ee4e1'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -28,7 +28,7 @@ def upgrade() -> None:
     sa.Column('source', sa.String(length=50), nullable=False),
     sa.Column('source_id', sa.String(length=255), nullable=True),
     sa.Column('total_lessons', sa.Integer(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('utc_timestamp()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.PrimaryKeyConstraint('course_id')
     )
     op.create_index('idx_source_source_id', 'courses', ['source', 'source_id'], unique=False)
@@ -37,8 +37,8 @@ def upgrade() -> None:
     sa.Column('telegram_id', sa.String(length=100), nullable=False),
     sa.Column('username', sa.String(length=255), nullable=True),
     sa.Column('level', sa.Integer(), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('utc_timestamp()'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('utc_timestamp()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.PrimaryKeyConstraint('user_id')
     )
     op.create_index(op.f('ix_users_telegram_id'), 'users', ['telegram_id'], unique=True)
@@ -66,8 +66,8 @@ def upgrade() -> None:
     sa.Column('deadline', sa.Date(), nullable=True),
     sa.Column('hours_per_day', sa.Integer(), nullable=True),
     sa.Column('reminder_time', sa.String(length=10), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('utc_timestamp()'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('utc_timestamp()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('expires_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['course_id'], ['courses.course_id'], ondelete='SET NULL'),
     sa.ForeignKeyConstraint(['user_id'], ['users.user_id'], ondelete='CASCADE'),
@@ -81,7 +81,7 @@ def upgrade() -> None:
     sa.Column('user_id', sa.Integer(), nullable=False),
     sa.Column('course_id', sa.Integer(), nullable=False),
     sa.Column('status', sa.String(length=20), nullable=False),
-    sa.Column('started_at', sa.DateTime(timezone=True), server_default=sa.text('utc_timestamp()'), nullable=False),
+    sa.Column('started_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('completed_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['course_id'], ['courses.course_id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['user_id'], ['users.user_id'], ondelete='CASCADE'),
@@ -105,7 +105,7 @@ def upgrade() -> None:
     sa.Column('lesson_id', sa.Integer(), nullable=False),
     sa.Column('status', sa.String(length=20), nullable=False),
     sa.Column('messages', sa.JSON(), nullable=True),
-    sa.Column('started_at', sa.DateTime(timezone=True), server_default=sa.text('utc_timestamp()'), nullable=False),
+    sa.Column('started_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('completed_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['lesson_id'], ['lessons.lesson_id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['user_id'], ['users.user_id'], ondelete='CASCADE'),
@@ -123,7 +123,7 @@ def upgrade() -> None:
     sa.Column('user_answer', sa.Text(), nullable=False),
     sa.Column('is_correct', sa.Boolean(), nullable=False),
     sa.Column('engagement_level', sa.String(length=20), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('utc_timestamp()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['concept_id'], ['concepts.concept_id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['session_id'], ['quiz_sessions.session_id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('answer_id')
@@ -137,7 +137,7 @@ def upgrade() -> None:
     sa.Column('user_course_id', sa.Integer(), nullable=True),
     sa.Column('concepts_mastered', sa.JSON(), nullable=True),
     sa.Column('concepts_weak', sa.JSON(), nullable=True),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('utc_timestamp()'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.ForeignKeyConstraint(['session_id'], ['quiz_sessions.session_id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['user_course_id'], ['user_courses.user_course_id'], ondelete='SET NULL'),
     sa.PrimaryKeyConstraint('summary_id'),

@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     """
 
     # Database Configuration
-    db_host: str = "localhost"
+    db_host: str = "127.0.0.1"
     db_port: int = 3306
     db_user: str = "root"
     db_password: str = ""

@@ -27,7 +27,6 @@ class User(Base):
     Relationships:
         user_courses: Association between users and courses they're enrolled in
         quiz_sessions: All quiz sessions initiated by this user
-        quiz_answers: All quiz answers submitted by this user
 
     Note:
         - telegram_id must be unique to prevent duplicate accounts
@@ -40,8 +39,8 @@ class User(Base):
     telegram_id = Column(String(100), unique=True, nullable=False, index=True)
     username = Column(String(255), nullable=True)
     level = Column(Integer, default=0, nullable=False)  # 0-3
-    created_at = Column(DateTime(timezone=True), server_default=func.utc_timestamp(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), server_default=func.utc_timestamp(), onupdate=func.utc_timestamp(), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     # Relationships
     user_courses = relationship(
@@ -52,12 +51,6 @@ class User(Base):
     )
     quiz_sessions = relationship(
         "QuizSession",
-        back_populates="user",
-        cascade="all, delete-orphan",
-        lazy="select"
-    )
-    quiz_answers = relationship(
-        "QuizAnswer",
         back_populates="user",
         cascade="all, delete-orphan",
         lazy="select"

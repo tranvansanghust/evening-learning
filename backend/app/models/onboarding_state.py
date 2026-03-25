@@ -59,8 +59,8 @@ class OnboardingState(Base):
     deadline = Column(Date, nullable=True)
     hours_per_day = Column(Integer, nullable=True)
     reminder_time = Column(String(10), nullable=True)  # "HH:MM" format
-    created_at = Column(DateTime(timezone=True), server_default=func.utc_timestamp(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), server_default=func.utc_timestamp(), onupdate=func.utc_timestamp(), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     expires_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships

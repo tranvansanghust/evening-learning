@@ -53,7 +53,7 @@ class QuizSummary(Base):
     user_course_id = Column(Integer, ForeignKey("user_courses.user_course_id", ondelete="SET NULL"), nullable=True)
     concepts_mastered = Column(JSON, nullable=True)  # JSON array of mastered concept names
     concepts_weak = Column(JSON, nullable=True)  # JSON array with concept, user_answer, correct_explanation
-    created_at = Column(DateTime(timezone=True), server_default=func.utc_timestamp(), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships
     quiz_session = relationship(

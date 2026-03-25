@@ -42,7 +42,7 @@ class UserCourse(Base):
     user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
     course_id = Column(Integer, ForeignKey("courses.course_id", ondelete="CASCADE"), nullable=False)
     status = Column(String(20), nullable=False, default="IN_PROGRESS")  # PASS, FAIL, IN_PROGRESS
-    started_at = Column(DateTime(timezone=True), server_default=func.utc_timestamp(), nullable=False)
+    started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships

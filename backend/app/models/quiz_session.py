@@ -49,7 +49,7 @@ class QuizSession(Base):
     lesson_id = Column(Integer, ForeignKey("lessons.lesson_id", ondelete="CASCADE"), nullable=False)
     status = Column(String(20), nullable=False, default="active")  # 'active', 'completed'
     messages = Column(JSON, nullable=True)  # Conversation history as JSON array
-    started_at = Column(DateTime(timezone=True), server_default=func.utc_timestamp(), nullable=False)
+    started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships

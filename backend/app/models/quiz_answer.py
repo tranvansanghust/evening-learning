@@ -49,7 +49,7 @@ class QuizAnswer(Base):
     user_answer = Column(Text, nullable=False)
     is_correct = Column(Boolean, nullable=False, default=False)
     engagement_level = Column(String(20), nullable=True)  # 'low', 'medium', 'high'
-    created_at = Column(DateTime(timezone=True), server_default=func.utc_timestamp(), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships
     session = relationship(

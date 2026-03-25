@@ -42,7 +42,7 @@ class Course(Base):
     source = Column(String(50), nullable=False, default="internal")  # 'udemy', 'internal', etc.
     source_id = Column(String(255), nullable=True)  # External ID from Udemy API or scraping
     total_lessons = Column(Integer, nullable=False, default=0)
-    created_at = Column(DateTime(timezone=True), server_default=func.utc_timestamp(), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships
     lessons = relationship(

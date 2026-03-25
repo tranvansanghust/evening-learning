@@ -19,7 +19,9 @@ from app.database import Base
 import app.models  # noqa: F401 - ensures all models are registered
 
 # Override sqlalchemy.url from .env
-config.set_main_option("sqlalchemy.url", settings.get_database_url())
+db_url = settings.get_database_url()
+print(f"Using database URL: {db_url}")
+config.set_main_option("sqlalchemy.url", db_url)
 
 target_metadata = Base.metadata
 
