@@ -289,6 +289,7 @@ class OnboardingService:
         self,
         user_id: int,
         current_step: Optional[str] = None,
+        course_topic: Optional[str] = None,
         course_id: Optional[int] = None,
         q1_answer: Optional[str] = None,
         q2_answer: Optional[str] = None,
@@ -333,6 +334,8 @@ class OnboardingService:
         # Update fields
         if current_step is not None:
             state.current_step = current_step
+        if course_topic is not None:
+            state.course_topic = course_topic
         if course_id is not None:
             state.course_id = course_id
         if q1_answer is not None:
@@ -539,29 +542,49 @@ class OnboardingService:
         logger.info(f"Created enrollment: user {user_id} → course {course_id}")
         return enrollment
 
-    def complete_onboarding(self, user_id: int) -> None:
+    def complete_onboarding(self, user_id: int) -> Optional[Lesson]:
         """
-        Mark onboarding as completed for a user.
+        Mark onboarding as completed: tạo Course + UserCourse, cập nhật user level.
 
-        Cleans up the onboarding state record.
-
-        Args:
-            user_id: ID of the user
-
-        Example:
-            >>> service.complete_onboarding(user_id=1)
+        Returns:
+            Lesson đầu tiên của course vừa tạo (để gửi cho user), hoặc None.
         """
         state = self.get_onboarding_state(user_id)
-
         if not state:
             logger.warning(f"No onboarding state found for user {user_id}")
-            return
+            return None
 
-        # Delete the onboarding state record
+        user = self.db.query(User).filter(User.user_id == user_id).first()
+
+        # Cập nhật level nếu có đủ Q1/Q2
+        if state.q1_answer and state.q2_answer:
+            try:
+                level = self.assess_level(state.q1_answer, state.q2_answer)
+                if user:
+                    user.level = level
+            except ValueError:
+                pass
+
+        # Tạo Course + Lessons từ course_topic
+        first_lesson = None
+        course_topic = state.course_topic or "General Learning"
+        course_slug = course_topic.lower().replace(" ", "-")[:50]
+        curriculum = self.fetch_udemy_curriculum(course_slug)
+        course = self.create_course_from_curriculum(
+            course_name=course_topic,
+            course_slug=course_slug,
+            curriculum=curriculum,
+        )
+        self.save_user_course_enrollment(user_id, course.course_id)
+        first_lesson = self.get_first_lesson(course.course_id)
+
+        logger.info(f"Completed onboarding for user {user_id}, course={course.course_id}")
+
+        # Xoá onboarding state
         self.db.delete(state)
         self.db.commit()
 
-        logger.info(f"Completed onboarding for user {user_id}")
+        return first_lesson
 
     def get_first_lesson(self, course_id: int) -> Optional[Lesson]:
         """

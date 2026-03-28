@@ -52,6 +52,7 @@ class OnboardingState(Base):
     onboarding_id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False, unique=True)
     current_step = Column(String(50), nullable=False, default="start")
+    course_topic = Column(String(500), nullable=True)  # raw input từ user: URL hoặc topic name
     course_id = Column(Integer, ForeignKey("courses.course_id", ondelete="SET NULL"), nullable=True)
     q1_answer = Column(String(50), nullable=True)  # "never" or "yes"
     q2_answer = Column(String(50), nullable=True)  # "no" or "yes"

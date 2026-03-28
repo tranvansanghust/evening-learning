@@ -94,19 +94,103 @@ async def cmd_start(message: Message) -> None:
 
 @router.message(Command("today"))
 async def cmd_today(message: Message) -> None:
-    await message.answer("📚 Bài học hôm nay đang được tải...")
+    from app.models import User, UserCourse, Lesson, Course
+
+    telegram_id = str(message.from_user.id)
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        if not user:
+            await message.answer("Bạn chưa có tài khoản. Gõ /start để bắt đầu!")
+            return
+
+        enrollment = (
+            db.query(UserCourse)
+            .filter(UserCourse.user_id == user.user_id, UserCourse.status == "IN_PROGRESS")
+            .first()
+        )
+        if not enrollment:
+            await message.answer("Bạn chưa có khoá học nào. Gõ /start để chọn khoá học!")
+            return
+
+        course = db.query(Course).filter(Course.course_id == enrollment.course_id).first()
+        lesson = (
+            db.query(Lesson)
+            .filter(Lesson.course_id == enrollment.course_id)
+            .order_by(Lesson.sequence_number)
+            .first()
+        )
+        if not lesson:
+            await message.answer(f"📚 Khoá học: {course.name}\n\nChưa có bài học nào.")
+            return
+
+        await message.answer(
+            f"📚 Khoá học: *{course.name}*\n\n"
+            f"📖 Bài hiện tại: *{lesson.title}*\n\n"
+            f"{lesson.description or ''}\n\n"
+            f"⏱ Thời lượng: ~{lesson.estimated_duration_minutes or 60} phút\n\n"
+            "Học xong thì gõ /done nhé! 💪",
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        logger.error(f"Error in cmd_today for {telegram_id}: {e}", exc_info=True)
+        await message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại!")
+    finally:
+        db.close()
 
 
 @router.message(Command("done"))
 async def cmd_done(message: Message) -> None:
-    await message.answer(
-        "Tốt lắm! 🎉\n\n"
-        "Hôm nay bạn học đến đâu rồi?\n\n"
-        "Hãy kể mình nghe:\n"
-        "• Bạn vừa học bài gì?\n"
-        "• Hiểu được những khái niệm gì?\n"
-        "• Phần nào còn khó hiểu?"
-    )
+    from app.models import User, UserCourse, Lesson, QuizSession
+
+    telegram_id = str(message.from_user.id)
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        if not user:
+            await message.answer("Bạn chưa có tài khoản. Gõ /start để bắt đầu!")
+            return
+
+        # Đang có quiz active rồi
+        active_session = (
+            db.query(QuizSession)
+            .filter(QuizSession.user_id == user.user_id, QuizSession.status == "active")
+            .first()
+        )
+        if active_session:
+            await message.answer("Bạn đang làm quiz rồi! Trả lời câu hỏi hiện tại nhé 😊")
+            return
+
+        # Kiểm tra có course chưa
+        enrollment = (
+            db.query(UserCourse)
+            .filter(UserCourse.user_id == user.user_id, UserCourse.status == "IN_PROGRESS")
+            .first()
+        )
+        if not enrollment:
+            await message.answer("Bạn chưa có khoá học. Gõ /start để chọn khoá học!")
+            return
+
+        # Set state "checkin" → handle_text sẽ nhận text tiếp theo
+        onboarding_service = OnboardingService(db)
+        ob_state = onboarding_service.get_onboarding_state(user.user_id)
+        if ob_state is None:
+            onboarding_service.create_onboarding_state(user.user_id)
+        onboarding_service.update_onboarding_state(user_id=user.user_id, current_step="checkin")
+
+        await message.answer(
+            "Tốt lắm! 🎉\n\n"
+            "Hôm nay bạn học được gì?\n\n"
+            "Kể mình nghe:\n"
+            "• Bạn vừa học bài gì?\n"
+            "• Hiểu được những khái niệm gì?\n"
+            "• Phần nào còn chưa rõ?"
+        )
+    except Exception as e:
+        logger.error(f"Error in cmd_done for {telegram_id}: {e}", exc_info=True)
+        await message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại!")
+    finally:
+        db.close()
 
 
 @router.message(Command("progress"))
@@ -200,9 +284,9 @@ async def _handle_onboarding_step(
     step = ob_state.current_step
 
     if step == "course_input":
-        onboarding_service.detect_course_from_input(text)
+        # Lưu topic/URL vào state để dùng khi complete_onboarding
         onboarding_service.update_onboarding_state(
-            user_id=user_id, current_step="q1"
+            user_id=user_id, course_topic=text, current_step="q1"
         )
         await message.answer(
             "Bạn đã từng xây dựng web app chưa?\n\n"
@@ -251,11 +335,22 @@ async def _handle_onboarding_step(
         onboarding_service.update_onboarding_state(
             user_id=user_id, reminder_time=reminder_time
         )
-        onboarding_service.complete_onboarding(user_id)
-        await message.answer(
-            "Onboarding hoàn thành! Bắt đầu học thôi 🚀\n\n"
-            "Dùng /today để xem bài học đầu tiên."
-        )
+        first_lesson = onboarding_service.complete_onboarding(user_id)
+        if first_lesson:
+            await message.answer(
+                "Onboarding hoàn thành! Bắt đầu học thôi 🚀\n\n"
+                f"📖 Bài học đầu tiên của bạn:\n*{first_lesson.title}*\n\n"
+                f"{first_lesson.description or ''}\n\n"
+                "Học xong thì gõ /done để làm quiz nhé! 💪",
+                parse_mode="Markdown",
+            )
+        else:
+            await message.answer(
+                "Onboarding hoàn thành! 🚀\n\nGõ /today để xem bài học đầu tiên."
+            )
+
+    elif step == "checkin":
+        await _handle_checkin(message, text, user_id, onboarding_service)
 
     else:
         await message.answer("Gõ /help để xem các lệnh có sẵn.")
@@ -289,9 +384,70 @@ def _parse_deadline(text: str):
     return date.today() + timedelta(days=90)
 
 
+async def _handle_checkin(
+    message: Message,
+    text: str,
+    user_id: int,
+    onboarding_service: OnboardingService,
+) -> None:
+    """User vừa mô tả hôm nay học được gì → start quiz."""
+    from app.models import UserCourse, Lesson
+    from app.config import settings
+
+    db = onboarding_service.db
+
+    enrollment = (
+        db.query(UserCourse)
+        .filter(UserCourse.user_id == user_id, UserCourse.status == "IN_PROGRESS")
+        .first()
+    )
+    if not enrollment:
+        await message.answer("Bạn chưa có khoá học. Gõ /start để bắt đầu!")
+        return
+
+    lesson = (
+        db.query(Lesson)
+        .filter(Lesson.course_id == enrollment.course_id)
+        .order_by(Lesson.sequence_number)
+        .first()
+    )
+    if not lesson:
+        await message.answer("Chưa có bài học nào trong khoá. Liên hệ admin nhé!")
+        return
+
+    # Xoá checkin state trước khi start quiz
+    onboarding_service.complete_onboarding(user_id)
+
+    llm_service = LLMService(
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url,
+        fast_model=settings.llm_fast_model,
+        smart_model=settings.llm_smart_model,
+    )
+    quiz_service = QuizService(llm_service)
+    result = quiz_service.start_quiz(
+        user_id=user_id,
+        lesson_id=lesson.lesson_id,
+        user_checkin=text,
+        db_session=db,
+    )
+
+    await message.answer(
+        f"Bắt đầu quiz! 📝\n\n{result['first_question']}"
+    )
+
+
 async def _handle_quiz_answer(message: Message, text: str, active_session, db) -> None:
     """Xử lý câu trả lời quiz, gửi feedback và câu tiếp theo hoặc tổng kết."""
-    quiz_service = QuizService(db)
+    from app.config import settings
+
+    llm_service = LLMService(
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url,
+        fast_model=settings.llm_fast_model,
+        smart_model=settings.llm_smart_model,
+    )
+    quiz_service = QuizService(llm_service)
     result = quiz_service.submit_answer(
         session_id=active_session.session_id,
         user_answer=text,
@@ -308,8 +464,8 @@ async def _handle_quiz_answer(message: Message, text: str, active_session, db) -
     if next_action == "end":
         summary = result.get("summary", "")
         await message.answer(
-            f"Quiz hoàn thành! ✅\n\n{summary}" if summary
-            else "Quiz hoàn thành! ✅\n\nDùng /progress để xem tiến độ."
+            f"Quiz hoàn thành! ✅\n\n{summary}\n\nGõ /today để xem bài tiếp theo 📚" if summary
+            else "Quiz hoàn thành! ✅\n\nGõ /today để xem bài tiếp theo 📚"
         )
     else:
         next_question = result.get("next_question", "")
