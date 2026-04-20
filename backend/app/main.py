@@ -75,7 +75,7 @@ async def health_check() -> dict:
     }
 
 
-from app.routers import telegram, onboarding, learning, quiz, progress
+from app.routers import onboarding, learning, quiz, progress
 
 
 def include_routers() -> None:
@@ -87,7 +87,6 @@ def include_routers() -> None:
     - app.routers.learning: Learning flow endpoints
     - app.routers.quiz: Quiz and evaluation endpoints
     - app.routers.progress: Progress tracking endpoints
-    - app.routers.telegram: Telegram webhook endpoint
     """
     # Include Onboarding router
     app.include_router(onboarding.router, prefix="/api/onboard", tags=["Onboarding"])
@@ -100,9 +99,6 @@ def include_routers() -> None:
 
     # Include Progress router
     app.include_router(progress.router, prefix="/api", tags=["Progress"])
-
-    # Include Telegram webhook router
-    app.include_router(telegram.router, tags=["Telegram Webhook"])
 
 
 # Include routers when this module is loaded
