@@ -586,6 +586,13 @@ class OnboardingService:
 
         return first_lesson
 
+    def clear_state(self, user_id: int) -> None:
+        """Delete onboarding state without any side effects (no course creation)."""
+        state = self.get_onboarding_state(user_id)
+        if state:
+            self.db.delete(state)
+            self.db.commit()
+
     def get_first_lesson(self, course_id: int) -> Optional[Lesson]:
         """
         Get the first lesson of a course.

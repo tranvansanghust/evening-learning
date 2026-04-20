@@ -19,7 +19,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.models import QuizSession, QuizAnswer, QuizSummary, Lesson, Concept, User
-from app.services.llm_service import LLMService, AnswerEvaluation, ActionType
+from app.services.llm_service import LLMService, AnswerEvaluation, ActionType, NextAction
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +101,8 @@ class QuizService:
             ).all()
 
             if not concepts:
-                logger.warning(f"Lesson {lesson_id} has no concepts")
-                concept_names = []
+                logger.warning(f"Lesson {lesson_id} has no concepts, falling back to lesson title")
+                concept_names = [lesson.title]
             else:
                 concept_names = [c.name for c in concepts]
 
@@ -223,7 +223,7 @@ class QuizService:
             concepts = db_session.query(Concept).filter(
                 Concept.lesson_id == lesson.lesson_id
             ).all()
-            concept_names = [c.name for c in concepts]
+            concept_names = [c.name for c in concepts] if concepts else [lesson.title]
 
             # Get conversation history
             messages = quiz_session.messages or []
@@ -269,18 +269,24 @@ class QuizService:
             messages.append({"role": "user", "content": user_answer})
 
             # Count questions asked so far
+            max_questions = 5
             question_count = sum(1 for m in messages if m.get("role") == "assistant")
 
-            # Decide next action
-            try:
-                next_action = self.llm_service.decide_next_action(
-                    answer_evaluation=evaluation,
-                    question_count=question_count,
-                    max_questions=5
-                )
-            except Exception as e:
-                logger.error(f"Failed to decide next action for session {session_id}: {str(e)}")
-                raise
+            # Hard cap: force END if question limit reached
+            if question_count >= max_questions:
+                forced_end = NextAction(action_type=ActionType.END, reason="Question limit reached")
+                next_action = forced_end
+            else:
+                # Decide next action via LLM
+                try:
+                    next_action = self.llm_service.decide_next_action(
+                        answer_evaluation=evaluation,
+                        question_count=question_count,
+                        max_questions=max_questions
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to decide next action for session {session_id}: {str(e)}")
+                    raise
 
             result = {
                 "evaluation": evaluation.model_dump(),
@@ -291,6 +297,18 @@ class QuizService:
 
             # Handle action
             if next_action.action_type == ActionType.END:
+                # Generate summary before ending
+                try:
+                    summary = self.llm_service.generate_quiz_summary(
+                        lesson_name=lesson.title,
+                        lesson_content=lesson_content,
+                        conversation_history=messages,
+                        concepts=concept_names,
+                    )
+                    result["summary"] = summary.summary_text
+                except Exception:
+                    result["summary"] = ""
+
                 # End the quiz
                 quiz_session.status = "completed"
                 quiz_session.completed_at = datetime.utcnow()

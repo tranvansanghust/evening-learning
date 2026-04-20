@@ -44,7 +44,7 @@ class QuizAnswer(Base):
 
     answer_id = Column(Integer, primary_key=True, autoincrement=True)
     session_id = Column(Integer, ForeignKey("quiz_sessions.session_id", ondelete="CASCADE"), nullable=False)
-    concept_id = Column(Integer, ForeignKey("concepts.concept_id", ondelete="CASCADE"), nullable=False)
+    concept_id = Column(Integer, ForeignKey("concepts.concept_id", ondelete="SET NULL"), nullable=True)
     question = Column(Text, nullable=False)
     user_answer = Column(Text, nullable=False)
     is_correct = Column(Boolean, nullable=False, default=False)
