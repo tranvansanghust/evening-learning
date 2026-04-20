@@ -181,6 +181,13 @@ async def cmd_done(message: Message) -> None:
             await message.answer("Bạn đang làm quiz rồi! Trả lời câu hỏi hiện tại nhé 😊")
             return
 
+        # Guard: đang onboarding thật → không cho /done
+        onboarding_service = OnboardingService(db)
+        ob_state = onboarding_service.get_onboarding_state(user.user_id)
+        if ob_state is not None:
+            await message.answer("Bạn đang onboarding dở. Hãy hoàn thành onboarding trước!")
+            return
+
         # Kiểm tra có course chưa
         enrollment = (
             db.query(UserCourse)
@@ -191,12 +198,9 @@ async def cmd_done(message: Message) -> None:
             await message.answer("Bạn chưa có khoá học. Gõ /start để chọn khoá học!")
             return
 
-        # Set state "checkin" → handle_text sẽ nhận text tiếp theo
-        onboarding_service = OnboardingService(db)
-        ob_state = onboarding_service.get_onboarding_state(user.user_id)
-        if ob_state is None:
-            onboarding_service.create_onboarding_state(user.user_id)
-        onboarding_service.update_onboarding_state(user_id=user.user_id, current_step="checkin")
+        # Set checkin_pending thay vì hack OnboardingState
+        user.checkin_pending = True
+        db.commit()
 
         await message.answer(
             "Tốt lắm! 🎉\n\n"
@@ -292,13 +296,18 @@ async def handle_text(message: Message) -> None:
         user = db.query(User).filter(User.telegram_id == telegram_id).first()
         user_id = user.user_id if user else None
 
-        # Ưu tiên 1: đang trong onboarding
+        # Ưu tiên 1: đang trong onboarding thật (không phải hack "checkin")
         ob_state = onboarding_service.get_onboarding_state(user_id)
-        if ob_state is not None:
+        if ob_state is not None and ob_state.current_step != "checkin":
             await _handle_onboarding_step(message, text, user_id, ob_state, onboarding_service)
             return
 
-        # Ưu tiên 2: đang trong quiz
+        # Ưu tiên 2: user đang chờ nhập mô tả bài học (checkin_pending)
+        if user and user.checkin_pending:
+            await _handle_checkin(message, text, user, db)
+            return
+
+        # Ưu tiên 3: đang trong quiz
         active_session = db.query(QuizSession).filter(
             QuizSession.user_id == user_id,
             QuizSession.status == "active",
@@ -399,9 +408,6 @@ async def _handle_onboarding_step(
                 "Onboarding hoàn thành! 🚀\n\nGõ /today để xem bài học đầu tiên."
             )
 
-    elif step == "checkin":
-        await _handle_checkin(message, text, user_id, onboarding_service)
-
     else:
         await message.answer("Gõ /help để xem các lệnh có sẵn.")
 
@@ -437,14 +443,14 @@ def _parse_deadline(text: str):
 async def _handle_checkin(
     message: Message,
     text: str,
-    user_id: int,
-    onboarding_service: OnboardingService,
+    user,
+    db,
 ) -> None:
     """User vừa mô tả hôm nay học được gì → start quiz."""
     from app.models import UserCourse, Lesson
     from app.config import settings
 
-    db = onboarding_service.db
+    user_id = user.user_id
 
     enrollment = (
         db.query(UserCourse)
@@ -465,8 +471,9 @@ async def _handle_checkin(
         await message.answer("Chưa có bài học nào trong khoá. Liên hệ admin nhé!")
         return
 
-    # Xoá checkin state trước khi start quiz (không tạo course mới)
-    onboarding_service.clear_state(user_id)
+    # Xoá checkin_pending trước khi start quiz
+    user.checkin_pending = False
+    db.commit()
 
     llm_service = LLMService(
         api_key=settings.llm_api_key,

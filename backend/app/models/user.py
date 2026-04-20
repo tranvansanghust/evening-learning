@@ -5,7 +5,7 @@ Represents a user of the platform, including their Telegram ID, username, and le
 """
 
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Index
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -39,6 +39,7 @@ class User(Base):
     telegram_id = Column(String(100), unique=True, nullable=False, index=True)
     username = Column(String(255), nullable=True)
     level = Column(Integer, default=0, nullable=False)  # 0-3
+    checkin_pending = Column(Boolean, default=False, nullable=False, server_default="0")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
