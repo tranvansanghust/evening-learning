@@ -14,7 +14,7 @@ Responsibilities:
 
 import logging
 from typing import Optional, Dict, Any, List
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,15 @@ from app.models import QuizSession, QuizAnswer, QuizSummary, Lesson, Concept, Us
 from app.services.llm_service import LLMService, AnswerEvaluation, ActionType, NextAction
 
 logger = logging.getLogger(__name__)
+
+
+def _next_review_interval_days(review_count: int) -> int:
+    """Return the number of days until next spaced repetition review.
+
+    Intervals: 0 reviews -> 3 days, 1 -> 7, 2 -> 14, 3+ -> 30.
+    """
+    intervals = {0: 3, 1: 7, 2: 14}
+    return intervals.get(review_count, 30)
 
 
 class QuizService:
@@ -462,7 +471,9 @@ class QuizService:
                 session_id=session_id,
                 user_course_id=None,  # Can be set later if needed
                 concepts_mastered=llm_summary.concepts_mastered,
-                concepts_weak=weak_concepts_json
+                concepts_weak=weak_concepts_json,
+                next_review_at=datetime.utcnow() + timedelta(days=_next_review_interval_days(0)),
+                review_count=0,
             )
             db_session.add(quiz_summary)
             db_session.commit()

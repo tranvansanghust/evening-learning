@@ -258,6 +258,28 @@ class ProgressService:
         return summary
 
     @staticmethod
+    def get_due_reviews(db_session: Session):
+        """Lấy (QuizSummary, User) pairs cần review hôm nay.
+
+        Returns:
+            List of (QuizSummary, User) tuples where next_review_at <= now
+            and the user's course is still IN_PROGRESS.
+        """
+        now = datetime.utcnow()
+        return (
+            db_session.query(QuizSummary, User)
+            .join(QuizSession, QuizSession.session_id == QuizSummary.session_id)
+            .join(User, User.user_id == QuizSession.user_id)
+            .join(UserCourse, UserCourse.user_id == User.user_id)
+            .filter(
+                QuizSummary.next_review_at <= now,
+                QuizSummary.next_review_at.isnot(None),
+                UserCourse.status == "IN_PROGRESS",
+            )
+            .all()
+        )
+
+    @staticmethod
     def get_review_by_topic(
         user_id: int, topic: str, db_session: Session
     ) -> List[QuizSummaryPreview]:

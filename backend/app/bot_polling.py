@@ -17,6 +17,7 @@ Make sure:
 import asyncio
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # Add parent directory to path for imports
@@ -25,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand, BotCommandScopeDefault
 from aiogram.fsm.storage.memory import MemoryStorage
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.config import settings
 from app.routers.telegram_handlers import router as handlers_router
@@ -35,6 +37,67 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+async def send_daily_reminders(bot: Bot) -> None:
+    """Gửi reminder cho users có giờ nhắc khớp với giờ hiện tại."""
+    from app.database import SessionLocal
+    from app.models import User, UserCourse
+
+    current_time = datetime.now().strftime("%H:%M")
+    db = SessionLocal()
+    try:
+        users_to_remind = (
+            db.query(User)
+            .join(UserCourse, UserCourse.user_id == User.user_id)
+            .filter(
+                User.reminder_time == current_time,
+                UserCourse.status == "IN_PROGRESS",
+            )
+            .all()
+        )
+        for user in users_to_remind:
+            try:
+                await bot.send_message(
+                    chat_id=user.telegram_id,
+                    text="🔔 Đến giờ học rồi!\n\nGõ /today để xem bài học hôm nay 📚",
+                )
+                logger.info(f"Sent reminder to user {user.user_id}")
+            except Exception as e:
+                logger.warning(f"Failed to send reminder to {user.telegram_id}: {e}")
+    finally:
+        db.close()
+
+
+async def send_spaced_repetition_reminders(bot: Bot) -> None:
+    """8h sáng: nhắc users cần ôn lại bài."""
+    from app.database import SessionLocal
+    from app.services.progress_service import ProgressService
+
+    db = SessionLocal()
+    try:
+        due_reviews = ProgressService.get_due_reviews(db_session=db)
+        for summary, user in due_reviews:
+            lesson_name = "bài học"
+            if summary.quiz_session and summary.quiz_session.lesson:
+                lesson_name = summary.quiz_session.lesson.title
+            try:
+                await bot.send_message(
+                    chat_id=user.telegram_id,
+                    text=(
+                        f"🔁 Đến giờ ôn lại rồi!\n\n"
+                        f"📖 Bài: <b>{lesson_name}</b>\n\n"
+                        "Gõ /done để bắt đầu quiz ôn tập nhé! 💪"
+                    ),
+                    parse_mode="HTML",
+                )
+                summary.next_review_at = None
+                db.commit()
+                logger.info(f"Sent spaced repetition reminder to user {user.user_id}")
+            except Exception as e:
+                logger.warning(f"Failed spaced rep reminder to {user.telegram_id}: {e}")
+    finally:
+        db.close()
 
 
 async def set_bot_commands(bot: Bot) -> None:
@@ -61,6 +124,7 @@ async def set_bot_commands(bot: Bot) -> None:
 
 async def main() -> None:
     """Main entry point for the bot."""
+    scheduler = None
     try:
         if not settings.telegram_bot_token:
             logger.error("❌ TELEGRAM_BOT_TOKEN not set in .env")
@@ -92,6 +156,24 @@ async def main() -> None:
         logger.info(f"Database: {settings.db_host}:{settings.db_port}")
         logger.info("=" * 60)
 
+        # Khởi động scheduler
+        scheduler = AsyncIOScheduler()
+        scheduler.add_job(
+            send_daily_reminders,
+            trigger="cron",
+            minute="*",
+            args=[bot],
+        )
+        scheduler.add_job(
+            send_spaced_repetition_reminders,
+            trigger="cron",
+            hour="8",
+            minute="0",
+            args=[bot],
+        )
+        scheduler.start()
+        logger.info("✅ Reminder scheduler started")
+
         # Start polling
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
 
@@ -99,6 +181,8 @@ async def main() -> None:
         logger.error(f"❌ Error starting bot: {e}", exc_info=True)
         sys.exit(1)
     finally:
+        if scheduler is not None:
+            scheduler.shutdown()
         await bot.session.close()
 
 
