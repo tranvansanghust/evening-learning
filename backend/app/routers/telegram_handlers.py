@@ -18,18 +18,20 @@ for learning, quizzes, progress tracking, and more.
 """
 
 import logging
+from datetime import datetime
 from typing import Optional
 
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from sqlalchemy.orm import Session
 
 from app.services.onboarding_service import OnboardingService
 from app.services.progress_service import ProgressService
 from app.services.quiz_service import QuizService
 from app.services.llm_service import LLMService
-from app.services.message_formatter import format_progress, format_quiz_list
+from app.services.llm_topic_suggester import LLMTopicSuggester
+from app.services.message_formatter import format_progress, format_quiz_list, format_quiz_detail
 from app.database import SessionLocal
 
 logger = logging.getLogger(__name__)
@@ -115,7 +117,9 @@ async def cmd_start(message: Message) -> None:
 
 @router.message(Command("today"))
 async def cmd_today(message: Message) -> None:
-    from app.models import User, UserCourse, Lesson, Course
+    from datetime import datetime
+    from app.models import User, UserCourse, Course
+    from app.config import settings
 
     telegram_id = str(message.from_user.id)
     db = SessionLocal()
@@ -131,16 +135,56 @@ async def cmd_today(message: Message) -> None:
             .first()
         )
         if not enrollment:
-            await message.answer("Bạn chưa có khoá học nào. Gõ /start để chọn khoá học!")
+            # Kiểm tra user đã PASS khoá nào chưa
+            passed = (
+                db.query(UserCourse)
+                .filter(UserCourse.user_id == user.user_id, UserCourse.status == "PASS")
+                .first()
+            )
+            if passed:
+                passed_course = db.query(Course).filter(Course.course_id == passed.course_id).first()
+                course_name = passed_course.name if passed_course else "khoá học"
+                await message.answer(
+                    f"🏆 Bạn đã hoàn thành khoá <b>{course_name}</b> rồi!\n\n"
+                    "Gõ /start để chọn khoá học mới.",
+                    parse_mode="HTML",
+                )
+            else:
+                await message.answer("Bạn chưa có khoá học nào. Gõ /start để chọn khoá học!")
             return
 
         course = db.query(Course).filter(Course.course_id == enrollment.course_id).first()
         lesson = get_current_lesson(user.user_id, enrollment.course_id, db)
+
         if not lesson:
+            # Tất cả lessons đã done — update status PASS lần đầu
+            enrollment.status = "PASS"
+            enrollment.completed_at = datetime.utcnow()
+            db.commit()
+
+            # Gợi ý chủ đề tiếp — fallback gracefully nếu LLM lỗi
+            next_msg = ""
+            try:
+                llm_client = LLMService(
+                    api_key=settings.llm_api_key,
+                    base_url=settings.llm_base_url,
+                    fast_model=settings.llm_fast_model,
+                    smart_model=settings.llm_smart_model,
+                )
+                suggester = LLMTopicSuggester(
+                    client=llm_client.client,
+                    fast_model=settings.llm_fast_model,
+                )
+                suggestions = suggester.suggest_next_topics(course.name)
+                next_msg = f"\n\n🎯 <b>Bạn có thể học tiếp:</b>\n{suggestions}"
+            except Exception as llm_err:
+                logger.warning(f"LLM suggest_next_topics failed (ignored): {llm_err}")
+
             await message.answer(
-                f"🎉 Bạn đã hoàn thành toàn bộ khoá học *{course.name}*!\n\n"
-                "Gõ /progress để xem kết quả.",
-                parse_mode="Markdown",
+                f"🎉 <b>Chúc mừng!</b> Bạn đã hoàn thành khoá học <b>{course.name}</b>!\n\n"
+                f"Bạn đã làm rất tốt 💪{next_msg}\n\n"
+                "Gõ /start để bắt đầu khoá học mới.",
+                parse_mode="HTML",
             )
             return
 
@@ -200,6 +244,9 @@ async def cmd_done(message: Message) -> None:
 
         # Set checkin_pending thay vì hack OnboardingState
         user.checkin_pending = True
+
+        # Update last_activity_at
+        enrollment.last_activity_at = datetime.utcnow()
         db.commit()
 
         await message.answer(
@@ -242,13 +289,31 @@ async def cmd_review(message: Message) -> None:
     from app.models import User
 
     telegram_id = str(message.from_user.id)
+    text = (message.text or "").strip()
+    parts = text.split(maxsplit=1)
+    topic = parts[1].strip() if len(parts) > 1 else None
+
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.telegram_id == telegram_id).first()
         if not user:
             await message.answer("Bạn chưa có tài khoản. Gõ /start để bắt đầu!")
             return
-        summaries = ProgressService.get_quiz_summaries(user.user_id, db_session=db)
+
+        progress_service = ProgressService(db)
+        if topic:
+            summaries = progress_service.get_review_by_topic(
+                user_id=user.user_id, topic=topic, db_session=db
+            )
+            if not summaries:
+                await message.answer(
+                    f"Không tìm thấy quiz nào về <b>{topic}</b>.\n\nGõ /review để xem tất cả.",
+                    parse_mode="HTML",
+                )
+                return
+        else:
+            summaries = progress_service.get_quiz_summaries(user.user_id, db_session=db)
+
         await message.answer(format_quiz_list(summaries), parse_mode="HTML")
     except Exception as e:
         logger.error(f"Error in cmd_review: {e}", exc_info=True)
@@ -347,9 +412,14 @@ async def _handle_onboarding_step(
         onboarding_service.update_onboarding_state(
             user_id=user_id, course_topic=text, current_step="q1"
         )
+        q1_keyboard = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="Chưa bao giờ"), KeyboardButton(text="Rồi")]],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
         await message.answer(
-            "Bạn đã từng xây dựng web app chưa?\n\n"
-            "Trả lời: có / chưa"
+            "Bạn đã từng xây dựng web app chưa?",
+            reply_markup=q1_keyboard,
         )
 
     elif step == "q1":
@@ -357,10 +427,17 @@ async def _handle_onboarding_step(
         onboarding_service.update_onboarding_state(
             user_id=user_id, q1_answer=answer, current_step="q2"
         )
+        q2_keyboard = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="Chưa"), KeyboardButton(text="Có rồi")]],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
         if answer == "never":
-            await message.answer("Bạn có biết HTML/CSS chưa?\n\nTrả lời: có / chưa")
+            await message.answer("Bạn có biết HTML/CSS chưa?", reply_markup=q2_keyboard)
         else:
-            await message.answer("Bạn đã dùng framework nào khác như React, Vue chưa?\n\nTrả lời: có / chưa")
+            await message.answer(
+                "Bạn đã dùng framework khác như Vue, Angular chưa?", reply_markup=q2_keyboard
+            )
 
     elif step == "q2":
         answer = "no" if any(w in text.lower() for w in ["chưa", "không", "never", "no"]) else "yes"
@@ -369,7 +446,8 @@ async def _handle_onboarding_step(
         )
         await message.answer(
             "Bạn muốn hoàn thành khoá học trong bao lâu?\n\n"
-            "Ví dụ: 1 month, 3 months, 2026-06-01"
+            "Ví dụ: 1 month, 3 months, 2026-06-01",
+            reply_markup=ReplyKeyboardRemove(),
         )
 
     elif step == "deadline":
@@ -519,11 +597,33 @@ async def _handle_quiz_answer(message: Message, text: str, active_session, db) -
         await message.answer(feedback)
 
     if next_action == "end":
-        summary = result.get("summary", "")
-        await message.answer(
-            f"Quiz hoàn thành! ✅\n\n{summary}\n\nGõ /today để xem bài tiếp theo 📚" if summary
-            else "Quiz hoàn thành! ✅\n\nGõ /today để xem bài tiếp theo 📚"
-        )
+        # Update last_activity_at on quiz completion
+        from app.models import UserCourse
+        enrollment = db.query(UserCourse).filter(
+            UserCourse.user_id == active_session.user_id,
+            UserCourse.status == "IN_PROGRESS",
+        ).first()
+        if enrollment:
+            enrollment.last_activity_at = datetime.utcnow()
+            db.commit()
+
+        lesson_name = active_session.lesson.title if active_session.lesson else "Bài học"
+        try:
+            summary_data = quiz_service.get_or_generate_summary(
+                session_id=active_session.session_id, db_session=db
+            )
+            msg = format_quiz_detail(
+                lesson_name=lesson_name,
+                concepts_mastered=summary_data.get("concepts_mastered", []),
+                concepts_weak=summary_data.get("concepts_weak", []),
+            )
+        except Exception:
+            summary = result.get("summary", "")
+            msg = (
+                f"Quiz hoàn thành! ✅\n\n{summary}\n\nGõ /today để xem bài tiếp theo 📚"
+                if summary else "Quiz hoàn thành! ✅\n\nGõ /today để xem bài tiếp theo 📚"
+            )
+        await message.answer(msg, parse_mode="HTML")
     else:
         next_question = result.get("next_question", "")
         if next_question:

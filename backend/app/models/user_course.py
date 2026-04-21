@@ -44,6 +44,7 @@ class UserCourse(Base):
     status = Column(String(20), nullable=False, default="IN_PROGRESS")  # PASS, FAIL, IN_PROGRESS
     started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
 
     # Relationships
     user = relationship(

@@ -100,6 +100,44 @@ async def send_spaced_repetition_reminders(bot: Bot) -> None:
         db.close()
 
 
+async def send_reengagement_messages(bot: Bot) -> None:
+    """9h sáng: nhắc users bỏ học theo thang +1/+3/+5 ngày."""
+    from app.database import SessionLocal
+    from app.models import User, UserCourse, Course
+    from app.services.message_formatter import build_reengagement_message
+
+    db = SessionLocal()
+    try:
+        now = datetime.utcnow()
+        rows = (
+            db.query(UserCourse, User, Course)
+            .join(User, User.user_id == UserCourse.user_id)
+            .join(Course, Course.course_id == UserCourse.course_id)
+            .filter(UserCourse.status == "IN_PROGRESS")
+            .all()
+        )
+        for enrollment, user, course in rows:
+            if not enrollment.last_activity_at:
+                continue
+            days_inactive = (now - enrollment.last_activity_at).days
+            if days_inactive not in (1, 3, 5):
+                continue
+            msg = build_reengagement_message(days_inactive, course.name)
+            if not msg:
+                continue
+            try:
+                await bot.send_message(
+                    chat_id=user.telegram_id,
+                    text=msg,
+                    parse_mode="HTML",
+                )
+                logger.info(f"Re-engagement +{days_inactive}d sent to user {user.user_id}")
+            except Exception as e:
+                logger.warning(f"Failed re-engagement to {user.telegram_id}: {e}")
+    finally:
+        db.close()
+
+
 async def set_bot_commands(bot: Bot) -> None:
     """Set up bot commands displayed to users."""
     commands = [
@@ -168,6 +206,13 @@ async def main() -> None:
             send_spaced_repetition_reminders,
             trigger="cron",
             hour="8",
+            minute="0",
+            args=[bot],
+        )
+        scheduler.add_job(
+            send_reengagement_messages,
+            trigger="cron",
+            hour="9",
             minute="0",
             args=[bot],
         )
