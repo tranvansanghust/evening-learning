@@ -565,6 +565,11 @@ class OnboardingService:
             except ValueError:
                 pass
 
+        # Copy reminder_time từ onboarding state sang user record
+        if state.reminder_time and user:
+            user.reminder_time = state.reminder_time
+            self.db.commit()
+
         # Tạo Course + Lessons từ course_topic
         first_lesson = None
         course_topic = state.course_topic or "General Learning"

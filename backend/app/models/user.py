@@ -40,6 +40,7 @@ class User(Base):
     username = Column(String(255), nullable=True)
     level = Column(Integer, default=0, nullable=False)  # 0-3
     checkin_pending = Column(Boolean, default=False, nullable=False, server_default="0")
+    reminder_time = Column(String(10), nullable=True)  # format "HH:MM", e.g. "20:00"
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
