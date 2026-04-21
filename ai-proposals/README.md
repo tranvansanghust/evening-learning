@@ -10,10 +10,17 @@ Trước khi làm bất kỳ task nào, đọc `docs/tech/codebase-health.md` đ
 | [02](task-02-fix-today-lesson-tracking.md) | Fix `/today` luôn trả lesson đầu | ✅ Done |
 | [03](task-03-implement-progress-review.md) | Implement `/progress` và `/review` thật | ✅ Done |
 | [04](task-04-fix-checkin-state.md) | Tách checkin state ra khỏi OnboardingState | ✅ Done |
+| [05](task-05-daily-reminder-scheduler.md) | Daily reminder scheduler + fix reminder_time | ✅ Done |
+| [06](task-06-spaced-repetition.md) | Spaced repetition 3/7/14/30 ngày | ✅ Done |
+| [07](task-07-reengagement-flow.md) | Re-engagement +1/+3/+5 ngày bỏ học | ✅ Done |
+| [08](task-08-inline-buttons.md) | Inline keyboard buttons onboarding Q1/Q2 | ✅ Done |
+| [09](task-09-quiz-summary-format.md) | Quiz summary format ✅/⚠️ | ✅ Done |
+| [10](task-10-review-topic-parsing.md) | `/review [topic]` filter theo chủ đề | ✅ Done |
+| [11](task-11-course-completion.md) | Course completion PASS + gợi ý khóa tiếp | ✅ Done |
 
 ## Tasks còn lại
 
-### Nhóm A — Độc lập, có thể spawn song song
+### Nhóm C — LLM-powered Onboarding (task-12 trước, task-13 sau)
 
 | Task | File | Mô tả | Rủi ro |
 |---|---|---|---|
@@ -22,19 +29,20 @@ Trước khi làm bất kỳ task nào, đọc `docs/tech/codebase-health.md` đ
 | [10](task-10-review-topic-parsing.md) | `telegram_handlers.py` | `/review [topic]` filter theo chủ đề | Thấp |
 | [11](task-11-course-completion.md) | `telegram_handlers.py`, `llm_service.py` | PASS flow — chúc mừng + gợi ý khóa tiếp | Thấp |
 
-### Nhóm B — Cần scheduler (task-05 phải làm trước)
+### Nhóm C — LLM-powered Onboarding (task-12 trước, task-13 sau)
 
 | Task | File | Mô tả | Rủi ro |
 |---|---|---|---|
-| [05](task-05-daily-reminder-scheduler.md) | `models/user.py`, `onboarding_service.py`, `bot_polling.py` | **Prerequisite** — fix reminder_time + APScheduler | Trung bình |
-| [06](task-06-spaced-repetition.md) | `models/quiz_summary.py`, `quiz_service.py`, `bot_polling.py` | Spaced repetition 3/7/14/30 ngày | Trung bình |
-| [07](task-07-reengagement-flow.md) | `models/user_course.py`, `bot_polling.py`, `telegram_handlers.py` | Re-engagement +1/+3/+5 ngày bỏ học | Trung bình |
+| [12](task-12-llm-assessment-questions.md) | `llm_service.py`, `onboarding_state.py`, `telegram_handlers.py` | LLM gen câu hỏi phù hợp course_topic | Trung bình |
+| [13](task-13-llm-level-assessment.md) | `llm_service.py`, `telegram_handlers.py`, `onboarding_service.py` | LLM đánh giá trình độ từ free-text answers | Trung bình |
+
+**Thứ tự:** task-12 trước (thêm LLM questions), task-13 sau (thêm LLM evaluation + bỏ binary).
 
 ## Thứ tự đề xuất
 
-1. **Nhóm A** (08, 09, 10, 11) — làm song song, không phụ thuộc gì
-2. **Task 05** — prerequisite cho nhóm B
-3. **Task 06 + 07** — song song sau khi task 05 xong
+1. ~~**Nhóm A** (08–11)~~ ✅ Done
+2. ~~**Nhóm B** (05–07)~~ ✅ Done
+3. **Task 12** → **Task 13** — LLM onboarding (sequential)
 
 ## Quy tắc chung cho mọi agent
 
