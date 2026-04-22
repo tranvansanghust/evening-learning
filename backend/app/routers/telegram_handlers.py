@@ -32,6 +32,7 @@ from app.services.quiz_service import QuizService
 from app.services.llm_service import LLMService
 from app.services.llm_topic_suggester import LLMTopicSuggester
 from app.services.message_formatter import format_progress, format_quiz_list, format_quiz_detail
+from app.services.llm_assessment import LLMAssessmentGenerator
 from app.database import SessionLocal
 
 logger = logging.getLogger(__name__)
@@ -264,6 +265,43 @@ async def cmd_done(message: Message) -> None:
         db.close()
 
 
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message) -> None:
+    from app.models import User, QuizSession
+
+    telegram_id = str(message.from_user.id)
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        if not user:
+            await message.answer("Bạn chưa có tài khoản. Gõ /start để bắt đầu!")
+            return
+
+        active_session = (
+            db.query(QuizSession)
+            .filter(QuizSession.user_id == user.user_id, QuizSession.status == "active")
+            .first()
+        )
+        if not active_session and not user.checkin_pending:
+            await message.answer("Không có quiz nào đang chạy.")
+            return
+
+        if active_session:
+            active_session.status = "abandoned"
+        if user.checkin_pending:
+            user.checkin_pending = False
+        db.commit()
+
+        await message.answer(
+            "✅ Đã huỷ quiz.\n\nGõ /done để bắt đầu quiz mới, hoặc /today để xem bài học."
+        )
+    except Exception as e:
+        logger.error(f"Error in cmd_cancel: {e}", exc_info=True)
+        await message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại!")
+    finally:
+        db.close()
+
+
 @router.message(Command("progress"))
 async def cmd_progress(message: Message) -> None:
     from app.models import User
@@ -322,6 +360,60 @@ async def cmd_review(message: Message) -> None:
         db.close()
 
 
+@router.message(Command("reset"))
+async def cmd_reset(message: Message) -> None:
+    """Reset user state: clear active quiz, checkin_pending, and onboarding state."""
+    from app.models import User, QuizSession
+
+    telegram_id = str(message.from_user.id)
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        if not user:
+            await message.answer("Bạn chưa có tài khoản. Gõ /start để bắt đầu!")
+            return
+
+        cleared = []
+
+        # Clear active quiz sessions
+        active_sessions = (
+            db.query(QuizSession)
+            .filter(QuizSession.user_id == user.user_id, QuizSession.status == "active")
+            .all()
+        )
+        if active_sessions:
+            for s in active_sessions:
+                s.status = "abandoned"
+            cleared.append(f"{len(active_sessions)} quiz đang chạy")
+
+        # Clear checkin_pending
+        if user.checkin_pending:
+            user.checkin_pending = False
+            cleared.append("trạng thái checkin")
+
+        # Clear onboarding state
+        onboarding_service = OnboardingService(db)
+        ob_state = onboarding_service.get_onboarding_state(user.user_id)
+        if ob_state is not None:
+            onboarding_service.clear_state(user.user_id)
+            cleared.append("trạng thái onboarding")
+
+        db.commit()
+
+        if cleared:
+            await message.answer(
+                f"✅ Đã reset: {', '.join(cleared)}.\n\n"
+                "Gõ /start để bắt đầu lại, hoặc /today để xem bài học."
+            )
+        else:
+            await message.answer("Không có trạng thái nào cần reset.")
+    except Exception as e:
+        logger.error(f"Error in cmd_reset: {e}", exc_info=True)
+        await message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại!")
+    finally:
+        db.close()
+
+
 @router.message(Command("resume"))
 async def cmd_resume(message: Message) -> None:
     await message.answer("▶️ Quay lại học tiếp thôi! 💪")
@@ -342,7 +434,9 @@ async def cmd_help(message: Message) -> None:
         "/progress - Tiến độ học tập\n"
         "/review - Xem quiz đã làm\n"
         "/resume - Tiếp tục học\n"
-        "/pause - Tạm dừng nhắc nhở"
+        "/pause - Tạm dừng nhắc nhở\n"
+        "/cancel - Huỷ quiz đang chạy\n"
+        "/reset - Reset trạng thái nếu bị kẹt"
     )
 
 
@@ -408,19 +502,32 @@ async def _handle_onboarding_step(
     step = ob_state.current_step
 
     if step == "course_input":
-        # Lưu topic/URL vào state để dùng khi complete_onboarding
+        from app.config import settings
+
+        # Generate dynamic assessment questions via LLM
+        llm = LLMService(
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url,
+            fast_model=settings.llm_fast_model,
+            smart_model=settings.llm_smart_model,
+        )
+        assessor = LLMAssessmentGenerator(client=llm.client, fast_model=settings.llm_fast_model)
+        questions = assessor.generate_assessment_questions(text)
+
         onboarding_service.update_onboarding_state(
-            user_id=user_id, course_topic=text, current_step="q1"
+            user_id=user_id,
+            course_topic=text,
+            current_step="q1",
+            q1_text=questions["q1"],
+            q2_text_if_no=questions["q2_if_no"],
+            q2_text_if_yes=questions["q2_if_yes"],
         )
         q1_keyboard = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="Chưa bao giờ"), KeyboardButton(text="Rồi")]],
+            keyboard=[[KeyboardButton(text="Chưa"), KeyboardButton(text="Rồi")]],
             resize_keyboard=True,
             one_time_keyboard=True,
         )
-        await message.answer(
-            "Bạn đã từng xây dựng web app chưa?",
-            reply_markup=q1_keyboard,
-        )
+        await message.answer(questions["q1"], reply_markup=q1_keyboard)
 
     elif step == "q1":
         answer = "never" if any(w in text.lower() for w in ["chưa", "không", "never", "no"]) else "yes"
@@ -432,12 +539,8 @@ async def _handle_onboarding_step(
             resize_keyboard=True,
             one_time_keyboard=True,
         )
-        if answer == "never":
-            await message.answer("Bạn có biết HTML/CSS chưa?", reply_markup=q2_keyboard)
-        else:
-            await message.answer(
-                "Bạn đã dùng framework khác như Vue, Angular chưa?", reply_markup=q2_keyboard
-            )
+        q2_text = ob_state.q2_text_if_no if answer == "never" else ob_state.q2_text_if_yes
+        await message.answer(q2_text or "Bạn đã có kiến thức nền tảng chưa?", reply_markup=q2_keyboard)
 
     elif step == "q2":
         answer = "no" if any(w in text.lower() for w in ["chưa", "không", "never", "no"]) else "yes"

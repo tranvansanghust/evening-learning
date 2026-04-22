@@ -79,11 +79,11 @@ class ProgressService:
 
         course_ids = [uc.course_id for uc in user_courses]
 
-        # Count lessons completed (lessons with quiz summaries for this user)
+        # Count lessons completed (distinct lessons with a completed quiz session for this user)
         lessons_completed = (
-            db_session.query(func.count(func.distinct(Lesson.lesson_id)))
-            .join(QuizSummary, QuizSummary.user_course_id == UserCourse.user_course_id)
-            .join(Lesson, Lesson.lesson_id == QuizSummary.quiz_session.lesson_id)
+            db_session.query(func.count(func.distinct(QuizSession.lesson_id)))
+            .join(QuizSummary, QuizSummary.session_id == QuizSession.session_id)
+            .join(UserCourse, UserCourse.user_course_id == QuizSummary.user_course_id)
             .filter(UserCourse.user_id == user_id)
             .scalar() or 0
         )

@@ -56,6 +56,9 @@ class OnboardingState(Base):
     course_id = Column(Integer, ForeignKey("courses.course_id", ondelete="SET NULL"), nullable=True)
     q1_answer = Column(String(50), nullable=True)  # "never" or "yes"
     q2_answer = Column(String(50), nullable=True)  # "no" or "yes"
+    q1_text = Column(String(300), nullable=True)  # LLM-generated Q1 text
+    q2_text_if_no = Column(String(300), nullable=True)  # LLM-generated Q2 text khi Q1="never"
+    q2_text_if_yes = Column(String(300), nullable=True)  # LLM-generated Q2 text khi Q1="yes"
     assessed_level = Column(Integer, nullable=True)  # 0-3
     deadline = Column(Date, nullable=True)
     hours_per_day = Column(Integer, nullable=True)

@@ -150,6 +150,8 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="answer", description="💬 Submit quiz answer"),
         BotCommand(command="resume", description="▶️ Resume learning"),
         BotCommand(command="pause", description="⏸ Pause reminders"),
+        BotCommand(command="cancel", description="❌ Huỷ quiz đang chạy"),
+        BotCommand(command="reset", description="🔄 Reset trạng thái nếu bị kẹt"),
         BotCommand(command="help", description="❓ Show help"),
     ]
 

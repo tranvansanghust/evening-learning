@@ -297,6 +297,9 @@ class OnboardingService:
         deadline: Optional[date] = None,
         hours_per_day: Optional[int] = None,
         reminder_time: Optional[str] = None,
+        q1_text: Optional[str] = None,
+        q2_text_if_no: Optional[str] = None,
+        q2_text_if_yes: Optional[str] = None,
     ) -> OnboardingState:
         """
         Update the onboarding state for a user.
@@ -350,6 +353,12 @@ class OnboardingService:
             state.hours_per_day = hours_per_day
         if reminder_time is not None:
             state.reminder_time = reminder_time
+        if q1_text is not None:
+            state.q1_text = q1_text
+        if q2_text_if_no is not None:
+            state.q2_text_if_no = q2_text_if_no
+        if q2_text_if_yes is not None:
+            state.q2_text_if_yes = q2_text_if_yes
 
         self.db.commit()
         self.db.refresh(state)

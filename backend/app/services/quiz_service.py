@@ -128,10 +128,16 @@ class QuizService:
             session_id = quiz_session.session_id
             logger.info(f"Created quiz session {session_id} for user {user_id}, lesson {lesson_id}")
 
-            # Build lesson context
+            # Build lesson context — user_checkin is the primary source of truth for what was learned
             lesson_content = lesson.description or ""
             if lesson.content_url:
                 lesson_content += f"\n\nContent URL: {lesson.content_url}"
+            if user_checkin:
+                # Prepend checkin so LLM focuses on what the user actually studied today
+                lesson_content = f"Học viên tự mô tả nội dung đã học hôm nay: {user_checkin}\n\n{lesson_content}".strip()
+                # If concept_names is just a generic fallback, replace with checkin text
+                if concept_names == [lesson.title]:
+                    concept_names = [user_checkin]
 
             # Build conversation history (empty for first question)
             conversation_history = []
@@ -149,10 +155,11 @@ class QuizService:
                 db_session.rollback()
                 raise
 
-            # Save first question to conversation history
-            messages = [
-                {"role": "assistant", "content": first_question}
-            ]
+            # Save first question (and checkin as metadata) to conversation history
+            messages = [{"role": "assistant", "content": first_question}]
+            if user_checkin:
+                # Store checkin as metadata for submit_answer to use later
+                messages.insert(0, {"role": "_checkin", "content": user_checkin})
             quiz_session.messages = messages
             db_session.commit()
 
@@ -234,8 +241,20 @@ class QuizService:
             ).all()
             concept_names = [c.name for c in concepts] if concepts else [lesson.title]
 
-            # Get conversation history
-            messages = quiz_session.messages or []
+            # Get conversation history (may include _checkin metadata)
+            all_messages = quiz_session.messages or []
+
+            # Recover user_checkin stored as metadata and enrich lesson_content
+            stored_checkin = next(
+                (m["content"] for m in all_messages if m.get("role") == "_checkin"), None
+            )
+            if stored_checkin:
+                lesson_content = f"Học viên tự mô tả nội dung đã học: {stored_checkin}\n\n{lesson_content}".strip()
+                if concept_names == [lesson.title]:
+                    concept_names = [stored_checkin]
+
+            # Exclude _checkin metadata from conversation history sent to LLM
+            messages = [m for m in all_messages if m.get("role") != "_checkin"]
 
             # Get the last question asked (should be the most recent assistant message)
             current_question = None
@@ -362,8 +381,9 @@ class QuizService:
                 result["next_question"] = next_question
                 logger.info(f"Quiz session {session_id}: Next question #{question_count + 1}")
 
-            # Update conversation history
-            quiz_session.messages = messages
+            # Update conversation history — re-attach _checkin metadata so it persists
+            checkin_entries = [m for m in all_messages if m.get("role") == "_checkin"]
+            quiz_session.messages = checkin_entries + messages
             db_session.commit()
 
             return result

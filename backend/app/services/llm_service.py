@@ -14,6 +14,7 @@ from typing import List, Optional, Dict, Any
 from enum import Enum
 
 from pydantic import BaseModel, Field
+import httpx
 from openai import OpenAI, APIError, RateLimitError, APITimeoutError
 
 from app.services.llm_prompts import LLMPrompts
@@ -126,7 +127,12 @@ class LLMService:
 
         self.FAST_MODEL = fast_model
         self.SMART_MODEL = smart_model
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        # Explicit proxy map: dùng HTTP proxy cho HTTPS, bỏ qua ALL_PROXY socks5h (httpx không hỗ trợ)
+        # max_retries=3: tự retry khi gặp 503 (server overloaded)
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+        )
         logger.info(f"LLMService initialized (base_url={base_url}, fast={fast_model}, smart={smart_model})")
 
     def generate_quiz_question(
@@ -181,6 +187,7 @@ class LLMService:
                 model=self.FAST_MODEL,
                 max_tokens=500,
                 messages=[
+                    {"role": "system", "content": "Bạn là trợ lý tạo câu hỏi ôn tập kiến thức. Nhiệm vụ của bạn là tạo các câu hỏi ngắn gọn bằng tiếng Việt dựa trên nội dung bài học được cung cấp."},
                     {"role": "user", "content": prompt}
                 ]
             )
@@ -252,11 +259,15 @@ class LLMService:
                 model=self.SMART_MODEL,
                 max_tokens=500,
                 messages=[
+                    {"role": "system", "content": "Bạn là trợ lý đánh giá câu trả lời học viên. Chỉ trả về JSON object theo đúng format yêu cầu, không thêm text khác."},
                     {"role": "user", "content": prompt}
                 ]
             )
 
-            response_text = message.choices[0].message.content.strip()
+            raw = message.choices[0].message.content
+            if not raw or not raw.strip():
+                raise ValueError("LLM returned empty response for evaluation")
+            response_text = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
             evaluation_dict = json.loads(response_text)
 
             evaluation = AnswerEvaluation(
@@ -330,11 +341,15 @@ class LLMService:
                 model=self.FAST_MODEL,
                 max_tokens=500,
                 messages=[
+                    {"role": "system", "content": "Bạn là trợ lý quyết định bước tiếp theo trong buổi ôn tập. Chỉ trả về JSON object theo đúng format yêu cầu, không thêm text khác."},
                     {"role": "user", "content": prompt}
                 ]
             )
 
-            response_text = message.choices[0].message.content.strip()
+            raw = message.choices[0].message.content
+            if not raw or not raw.strip():
+                raise ValueError("LLM returned empty response for next action")
+            response_text = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
             decision_dict = json.loads(response_text)
 
             action = NextAction(
@@ -405,11 +420,15 @@ class LLMService:
                 model=self.SMART_MODEL,
                 max_tokens=1000,
                 messages=[
+                    {"role": "system", "content": "Bạn là trợ lý tổng kết buổi ôn tập kiến thức. Chỉ trả về JSON object theo đúng format yêu cầu, không thêm text khác."},
                     {"role": "user", "content": prompt}
                 ]
             )
 
-            response_text = message.choices[0].message.content.strip()
+            raw = message.choices[0].message.content
+            if not raw or not raw.strip():
+                raise ValueError("LLM returned empty response for quiz summary")
+            response_text = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
             summary_dict = json.loads(response_text)
 
             # Parse weak concepts with nested structure
@@ -500,11 +519,15 @@ class LLMService:
                 model=self.SMART_MODEL,
                 max_tokens=800,
                 messages=[
+                    {"role": "system", "content": "Bạn là trợ lý gợi ý lộ trình học tập. Chỉ trả về JSON object theo đúng format yêu cầu, không thêm text khác."},
                     {"role": "user", "content": prompt}
                 ]
             )
 
-            response_text = message.choices[0].message.content.strip()
+            raw = message.choices[0].message.content
+            if not raw or not raw.strip():
+                raise ValueError("LLM returned empty response for course suggestions")
+            response_text = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
             suggestions_dict = json.loads(response_text)
 
             suggestions = [

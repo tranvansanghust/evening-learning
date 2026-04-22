@@ -54,43 +54,39 @@ class LLMPrompts:
         concepts_section = ", ".join(concepts)
 
         if is_first_question:
-            prompt = f"""You are an expert AI tutor conducting an oral test for a student who just completed a lesson.
+            prompt = f"""Tạo một câu hỏi ôn tập bằng tiếng Việt cho học viên vừa học xong bài sau:
 
-The student just learned:
+---
 {lesson_content}
+---
 
-Key concepts they should understand: {concepts_section}
+Khái niệm cần kiểm tra: {concepts_section}
 
-Generate a natural, conversational first quiz question that:
-1. Tests one of the key concepts they should have learned
-2. Is open-ended (not multiple choice)
-3. Encourages them to demonstrate understanding
-4. Is appropriate for their level of learning (just completed the lesson)
-5. Avoids being too complex or too trivial
+Yêu cầu cho câu hỏi:
+- Hỏi về một trong các khái niệm trên
+- Câu hỏi mở, không phải trắc nghiệm
+- Ngắn gọn, thân thiện
+- Bằng tiếng Việt
 
-Keep the question concise and friendly in tone.
-
-IMPORTANT: Return ONLY the question text, no preamble or explanation."""
+Chỉ trả về câu hỏi, không thêm bất kỳ text nào khác."""
         else:
-            prompt = f"""You are an expert AI tutor conducting an oral test for a student.
+            prompt = f"""Tạo câu hỏi ôn tập tiếp theo bằng tiếng Việt.
 
-Lesson content being tested:
+Nội dung bài học:
+---
 {lesson_content}
+---
 
-Key concepts to test: {concepts_section}
+Khái niệm cần kiểm tra: {concepts_section}
 
 {history_section}
+Yêu cầu:
+- Hỏi về khái niệm chưa được đề cập trong lịch sử hội thoại
+- Tiếp nối tự nhiên với câu trả lời trước
+- Câu hỏi mở, khuyến khích giải thích
+- Bằng tiếng Việt
 
-Based on the conversation history above, generate the next follow-up quiz question that:
-1. Tests a different concept or aspect not yet covered
-2. Builds naturally on what was discussed
-3. Is conversational and flows from the previous exchange
-4. Probes deeper into understanding if the student answered well
-5. Is open-ended and encourages detailed response
-
-Keep the question concise and maintain a friendly, encouraging tone.
-
-IMPORTANT: Return ONLY the question text, no preamble or explanation."""
+Chỉ trả về câu hỏi, không thêm bất kỳ text nào khác."""
 
         return prompt
 
@@ -115,36 +111,36 @@ IMPORTANT: Return ONLY the question text, no preamble or explanation."""
         """
         concepts_str = ", ".join(concepts)
 
-        prompt = f"""You are an expert educator evaluating a student's understanding of lesson content.
+        prompt = f"""Đánh giá câu trả lời của học viên dựa trên nội dung bài học.
 
-LESSON CONTENT:
+NỘI DUNG BÀI HỌC:
 {lesson_context}
 
-CONCEPTS BEING TESTED: {concepts_str}
+KHÁI NIỆM CẦN KIỂM TRA: {concepts_str}
 
-QUESTION ASKED:
+CÂU HỎI:
 {question}
 
-STUDENT'S ANSWER:
+CÂU TRẢ LỜI CỦA HỌC VIÊN:
 {user_answer}
 
-Evaluate this answer and respond with a JSON object containing:
+Trả về JSON object:
 {{
-  "is_correct": <boolean - is the answer fundamentally correct?>,
-  "confidence": <float between 0.0 and 1.0 - how confident are you in this evaluation?>,
-  "engagement_level": "<'low' | 'medium' | 'high' - quality and depth of response>",
-  "key_concepts_covered": <list of concepts from the lesson that the student demonstrated understanding of>,
-  "key_concepts_missed": <list of concepts they failed to address or misunderstood>,
-  "feedback": "<brief, constructive feedback (1-2 sentences) encouraging them or pointing out what to review>"
+  "is_correct": <true/false - câu trả lời có đúng về cơ bản không?>,
+  "confidence": <số thực 0.0-1.0 - độ chắc chắn của đánh giá>,
+  "engagement_level": "<'low' | 'medium' | 'high' - chất lượng và độ sâu của câu trả lời>",
+  "key_concepts_covered": <danh sách khái niệm học viên hiểu đúng>,
+  "key_concepts_missed": <danh sách khái niệm học viên bỏ sót hoặc hiểu sai>,
+  "feedback": "<1-2 câu phản hồi ngắn bằng tiếng Việt, động viên và chỉ ra điều cần ôn>"
 }}
 
-Guidelines:
-- Accept partial understanding as correct if they got the main idea
-- Consider engagement level: low = minimal/vague response, medium = adequate response, high = thoughtful/detailed
-- Be encouraging but honest
-- Return valid JSON only, no markdown formatting
+Hướng dẫn:
+- Chấp nhận hiểu biết một phần là đúng nếu nắm được ý chính
+- low = trả lời sơ sài, medium = trả lời đủ ý, high = giải thích chi tiết và sâu
+- Phản hồi bằng tiếng Việt
+- Chỉ trả về JSON, không có markdown hay text khác
 
-IMPORTANT: Return ONLY the JSON object, no other text."""
+QUAN TRỌNG: Chỉ trả về JSON object."""
 
         return prompt
 
@@ -174,30 +170,29 @@ Current answer evaluation:
 - Concepts missed: {', '.join(answer_evaluation.get('key_concepts_missed', []))}
 """
 
-        prompt = f"""You are an AI tutor deciding whether to continue or end a quiz session.
+        prompt = f"""Quyết định bước tiếp theo trong buổi ôn tập kiến thức của học viên.
 
 {eval_summary}
 
-CONTEXT:
-- Questions asked so far: {question_count}
-- Maximum questions per session: {max_questions}
+THÔNG TIN:
+- Số câu hỏi đã hỏi: {question_count}
+- Giới hạn tối đa: {max_questions} câu
 
-Decide what to do next and respond with a JSON object:
+Trả về JSON object:
 {{
   "action_type": "<'continue' | 'followup' | 'end'>",
-  "reason": "<brief explanation of the decision>",
-  "follow_up_question": "<if action_type is 'followup', provide the follow-up question here. Otherwise, null>"
+  "reason": "<giải thích ngắn gọn lý do quyết định>",
+  "follow_up_question": "<nếu action_type là 'followup', đặt câu hỏi bổ sung bằng tiếng Việt. Nếu không, null>"
 }}
 
-Guidelines for decision:
-- "continue": The student answered well and understands the concept. Ask about a different concept next.
-- "followup": The student struggled or showed low engagement. Ask a follow-up to clarify or reinforce.
-- "end": Student has demonstrated good understanding OR we've hit the question limit (5 questions).
-- Generally, aim for 3-5 questions total before ending.
-- If a student answers incorrectly, use "followup" to give them a chance to clarify.
-- If engagement is "high" and answer is "correct" after 4+ questions, consider "end".
+Hướng dẫn:
+- "continue": học viên trả lời tốt → hỏi về khái niệm khác
+- "followup": học viên còn nhầm hoặc trả lời sơ sài → hỏi thêm để làm rõ
+- "end": học viên hiểu tốt HOẶC đã đạt giới hạn số câu hỏi
+- Thông thường hỏi 3-5 câu rồi kết thúc
+- follow_up_question phải bằng tiếng Việt
 
-IMPORTANT: Return ONLY the JSON object, no other text."""
+QUAN TRỌNG: Chỉ trả về JSON object, không có text khác."""
 
         return prompt
 
@@ -229,34 +224,39 @@ IMPORTANT: Return ONLY the JSON object, no other text."""
 
         concepts_str = ", ".join(concepts)
 
-        prompt = f"""You are an expert educator creating a summary of a student's quiz performance.
+        prompt = f"""Tổng kết buổi ôn tập kiến thức của học viên.
 
-LESSON: {lesson_name}
+BÀI HỌC: {lesson_name}
 
-LESSON CONTENT:
+NỘI DUNG BÀI HỌC:
 {lesson_content}
 
-ALL CONCEPTS IN LESSON: {concepts_str}
+TẤT CẢ KHÁI NIỆM TRONG BÀI: {concepts_str}
 
 {history_section}
 
-Based on the entire quiz conversation above, generate a comprehensive JSON summary:
+Dựa trên toàn bộ hội thoại trên, tạo JSON tổng kết:
 {{
-  "concepts_mastered": <list of concepts the student clearly understands>,
-  "concepts_weak": <list of concepts the student struggled with or didn't understand>,
-  "engagement_quality": "<'low' | 'medium' | 'high' - overall engagement throughout quiz>",
-  "summary_text": "<2-3 sentence summary of overall performance and key takeaways>",
-  "suggestions": <list of 2-3 concrete suggestions for next steps in learning>
+  "concepts_mastered": <danh sách khái niệm học viên nắm rõ>,
+  "concepts_weak": [
+    {{
+      "concept": "<tên khái niệm>",
+      "user_answer": "<học viên đã trả lời gì>",
+      "correct_explanation": "<giải thích đúng là gì>"
+    }}
+  ],
+  "engagement_quality": "<'low' | 'medium' | 'high' - chất lượng tham gia tổng thể>",
+  "summary_text": "<2-3 câu tổng kết bằng tiếng Việt>",
+  "suggestions": <danh sách 2-3 gợi ý cụ thể bằng tiếng Việt>
 }}
 
-Guidelines:
-- "concepts_mastered": Only include if student answered questions about them correctly with good engagement
-- "concepts_weak": Include concepts they got wrong, struggled with, or didn't address
-- "suggestions": Be specific and actionable (e.g., "Review JOIN syntax with more examples", not "Study harder")
-- Be encouraging while honest about areas needing improvement
-- Consider the overall quality and depth of responses
+Hướng dẫn:
+- concepts_mastered: chỉ ghi nếu học viên trả lời đúng với mức độ tốt
+- concepts_weak: ghi các khái niệm sai, nhầm lẫn, hoặc chưa đề cập
+- suggestions: cụ thể và có thể thực hiện được
+- Toàn bộ text bằng tiếng Việt
 
-IMPORTANT: Return ONLY the JSON object, no other text."""
+QUAN TRỌNG: Chỉ trả về JSON object, không có text khác."""
 
         return prompt
 
