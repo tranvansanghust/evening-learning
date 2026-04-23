@@ -74,9 +74,10 @@ async def _send_lesson_link(message: Message, lesson, course, db) -> None:
         logger.warning(f"_send_lesson_link: content generation failed (fallback used): {e}")
 
     url = _build_lesson_url(lesson.lesson_id)
+    course_prefix = f"{course.name} - " if course else ""
     await message.answer(
-        f"📖 *Bài {lesson.sequence_number}: {lesson.title}*\n\n"
-        f"Đọc nội dung bài học tại:\n{url}\n\n"
+        f"📖 *{course_prefix}Bài {lesson.sequence_number}: {lesson.title}*\n\n"
+        f"[📚 Đọc bài học tại đây]({url})\n\n"
         f"Sau khi đọc xong, gõ /done để làm quiz ✍️",
         parse_mode="Markdown",
     )
