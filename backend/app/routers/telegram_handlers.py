@@ -34,6 +34,7 @@ from app.services.llm_topic_suggester import LLMTopicSuggester
 from app.services.message_formatter import format_progress, format_quiz_list, format_quiz_detail
 from app.services.llm_assessment import LLMAssessmentGenerator
 from app.database import SessionLocal
+from app.routers.lesson_helpers import _send_lesson_link
 
 logger = logging.getLogger(__name__)
 
@@ -189,14 +190,7 @@ async def cmd_today(message: Message) -> None:
             )
             return
 
-        await message.answer(
-            f"📚 Khoá học: *{course.name}*\n\n"
-            f"📖 Bài hiện tại: *{lesson.title}*\n\n"
-            f"{lesson.description or ''}\n\n"
-            f"⏱ Thời lượng: ~{lesson.estimated_duration_minutes or 60} phút\n\n"
-            "Học xong thì gõ /done nhé! 💪",
-            parse_mode="Markdown",
-        )
+        await _send_lesson_link(message, lesson, course, db)
     except Exception as e:
         logger.error(f"Error in cmd_today for {telegram_id}: {e}", exc_info=True)
         await message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại!")
@@ -571,19 +565,25 @@ async def _handle_onboarding_step(
         await message.answer("Bạn muốn nhận nhắc nhở lúc mấy giờ?\n\nVí dụ: 20:00, 21:30")
 
     elif step == "reminder":
+        from app.models import Lesson, UserCourse, Course
+
         reminder_time = text.strip()
         onboarding_service.update_onboarding_state(
             user_id=user_id, reminder_time=reminder_time
         )
         first_lesson = onboarding_service.complete_onboarding(user_id)
         if first_lesson:
-            await message.answer(
-                "Onboarding hoàn thành! Bắt đầu học thôi 🚀\n\n"
-                f"📖 Bài học đầu tiên của bạn:\n*{first_lesson.title}*\n\n"
-                f"{first_lesson.description or ''}\n\n"
-                "Học xong thì gõ /done để làm quiz nhé! 💪",
-                parse_mode="Markdown",
-            )
+            db = onboarding_service.db
+            enrollment = db.query(UserCourse).filter(
+                UserCourse.user_id == user_id,
+            ).order_by(UserCourse.user_course_id.desc()).first()
+            course = None
+            if enrollment:
+                course = db.query(Course).filter(
+                    Course.course_id == enrollment.course_id
+                ).first()
+            await message.answer("🎉 Onboarding hoàn thành! Bắt đầu học thôi 🚀")
+            await _send_lesson_link(message, first_lesson, course, db)
         else:
             await message.answer(
                 "Onboarding hoàn thành! 🚀\n\nGõ /today để xem bài học đầu tiên."

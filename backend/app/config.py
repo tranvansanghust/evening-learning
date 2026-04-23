@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     api_port: int = 8000
     debug: bool = False
 
+    # Frontend URL for CORS
+    frontend_url: str = "http://localhost:5173"  # Vite dev default
+
     class Config:
         """Pydantic config for settings loading."""
         env_file = ".env"

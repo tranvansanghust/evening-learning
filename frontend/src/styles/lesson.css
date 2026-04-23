@@ -1,0 +1,194 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f8f9fa;
+  color: #212529;
+  line-height: 1.6;
+}
+
+/* ── Layout ── */
+.lesson-container {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 1rem 3rem;
+}
+
+/* ── Header ── */
+.lesson-header {
+  padding: 1.5rem 0 1rem;
+  border-bottom: 2px solid #e9ecef;
+  margin-bottom: 1.5rem;
+}
+
+.course-name {
+  font-size: 0.8rem;
+  color: #6c757d;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.25rem;
+}
+
+.lesson-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.lesson-badge {
+  display: inline-block;
+  background: #0d6efd;
+  color: white;
+  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 12px;
+}
+
+/* ── Content ── */
+.lesson-content {
+  line-height: 1.75;
+}
+
+.markdown-body h2 {
+  font-size: 1.25rem;
+  margin: 1.5rem 0 0.5rem;
+  color: #343a40;
+}
+
+.markdown-body h3 {
+  font-size: 1.05rem;
+  margin: 1.25rem 0 0.4rem;
+  color: #495057;
+}
+
+.markdown-body p {
+  margin-bottom: 1rem;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.markdown-body li {
+  margin-bottom: 0.25rem;
+}
+
+.markdown-body code {
+  background: #e9ecef;
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+.markdown-body pre {
+  background: #212529;
+  color: #f8f9fa;
+  padding: 1rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin-bottom: 1rem;
+}
+
+.markdown-body pre code {
+  background: none;
+  padding: 0;
+}
+
+.markdown-body blockquote {
+  border-left: 4px solid #0d6efd;
+  padding-left: 1rem;
+  color: #6c757d;
+  margin-bottom: 1rem;
+}
+
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1rem;
+  font-size: 0.95rem;
+}
+
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid #dee2e6;
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+
+.markdown-body th {
+  background: #e9ecef;
+  font-weight: 600;
+}
+
+/* ── Footer ── */
+.lesson-footer {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e9ecef;
+  color: #6c757d;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+/* ── Loading ── */
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+  gap: 1rem;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #e9ecef;
+  border-top-color: #0d6efd;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.loading-text {
+  color: #6c757d;
+  font-size: 0.95rem;
+}
+
+/* ── Error ── */
+.error-state {
+  padding: 2rem;
+  color: #dc3545;
+  text-align: center;
+  max-width: 480px;
+  margin: 4rem auto;
+  background: #fff5f5;
+  border-radius: 8px;
+  border: 1px solid #f5c2c7;
+}
+
+/* ── Mobile ── */
+@media (max-width: 480px) {
+  .lesson-title {
+    font-size: 1.25rem;
+  }
+
+  .lesson-container {
+    padding: 0 0.75rem 2rem;
+  }
+
+  .markdown-body pre {
+    font-size: 0.85rem;
+  }
+}

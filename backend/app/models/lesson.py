@@ -46,6 +46,8 @@ class Lesson(Base):
     description = Column(Text, nullable=True)
     content_url = Column(String(500), nullable=True)
     estimated_duration_minutes = Column(Integer, nullable=True)
+    content_markdown = Column(Text, nullable=True)
+    content_generated_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     course = relationship(

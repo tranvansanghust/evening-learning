@@ -47,7 +47,9 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",  # Local development
+        settings.frontend_url,        # From env (FRONTEND_URL)
+        "http://localhost:5173",       # Vite dev server default
+        "http://localhost:3000",       # React dev server
         "http://localhost",
         "http://127.0.0.1:3000",
     ],
@@ -76,6 +78,7 @@ async def health_check() -> dict:
 
 
 from app.routers import onboarding, learning, quiz, progress
+from app.routers.lesson_content import router as lesson_content_router
 
 
 def include_routers() -> None:
@@ -87,6 +90,7 @@ def include_routers() -> None:
     - app.routers.learning: Learning flow endpoints
     - app.routers.quiz: Quiz and evaluation endpoints
     - app.routers.progress: Progress tracking endpoints
+    - app.routers.lesson_content: Lesson content endpoints
     """
     # Include Onboarding router
     app.include_router(onboarding.router, prefix="/api/onboard", tags=["Onboarding"])
@@ -99,6 +103,9 @@ def include_routers() -> None:
 
     # Include Progress router
     app.include_router(progress.router, prefix="/api", tags=["Progress"])
+
+    # Include Lesson Content router
+    app.include_router(lesson_content_router)
 
 
 # Include routers when this module is loaded

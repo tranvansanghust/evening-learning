@@ -22,27 +22,30 @@ Trước khi làm bất kỳ task nào, đọc `docs/tech/codebase-health.md` đ
 
 ### Nhóm C — LLM-powered Onboarding (task-12 trước, task-13 sau)
 
+| Task | File | Mô tả | Trạng thái |
+|---|---|---|---|
+| [12](task-12-llm-assessment-questions.md) | `llm_assessment.py`, `onboarding_state.py`, `telegram_handlers.py` | LLM gen câu hỏi phù hợp course_topic | ✅ Done |
+| [13](task-13-llm-level-assessment.md) | `llm_service.py`, `telegram_handlers.py`, `onboarding_service.py` | LLM đánh giá trình độ từ free-text answers | 🔲 Todo |
+
+**Thứ tự:** task-12 done, task-13 tiếp theo.
+
+### Nhóm D — Frontend Web Lesson Viewer (sequential, 14→15→16→17)
+
 | Task | File | Mô tả | Rủi ro |
 |---|---|---|---|
-| [08](task-08-inline-buttons.md) | `telegram_handlers.py` | Thêm ReplyKeyboardMarkup cho onboarding Q1/Q2 | Thấp |
-| [09](task-09-quiz-summary-format.md) | `message_formatter.py`, `telegram_handlers.py` | Format quiz summary đẹp với ✅/⚠️ | Thấp |
-| [10](task-10-review-topic-parsing.md) | `telegram_handlers.py` | `/review [topic]` filter theo chủ đề | Thấp |
-| [11](task-11-course-completion.md) | `telegram_handlers.py`, `llm_service.py` | PASS flow — chúc mừng + gợi ý khóa tiếp | Thấp |
+| [14](task-14-lesson-content-generation.md) | `llm_content_generator.py`, `models/lesson.py` | LLM gen nội dung bài học Markdown + cache DB | Thấp |
+| [15](task-15-lesson-content-api.md) | `routers/lesson_content.py`, `main.py` | FastAPI endpoint serve lesson content + CORS | Thấp |
+| [16](task-16-frontend-lesson-viewer.md) | `frontend/` (Vite + React) | Web app render Markdown, mobile-friendly | Thấp |
+| [17](task-17-telegram-lesson-link.md) | `telegram_handlers.py` | Bot gửi link bài học sau onboarding và /today | Thấp |
 
-### Nhóm C — LLM-powered Onboarding (task-12 trước, task-13 sau)
-
-| Task | File | Mô tả | Rủi ro |
-|---|---|---|---|
-| [12](task-12-llm-assessment-questions.md) | `llm_service.py`, `onboarding_state.py`, `telegram_handlers.py` | LLM gen câu hỏi phù hợp course_topic | Trung bình |
-| [13](task-13-llm-level-assessment.md) | `llm_service.py`, `telegram_handlers.py`, `onboarding_service.py` | LLM đánh giá trình độ từ free-text answers | Trung bình |
-
-**Thứ tự:** task-12 trước (thêm LLM questions), task-13 sau (thêm LLM evaluation + bỏ binary).
+**Thứ tự bắt buộc:** 14 → 15 → 16 → 17 (mỗi task phụ thuộc task trước).
 
 ## Thứ tự đề xuất
 
 1. ~~**Nhóm A** (08–11)~~ ✅ Done
 2. ~~**Nhóm B** (05–07)~~ ✅ Done
-3. **Task 12** → **Task 13** — LLM onboarding (sequential)
+3. ~~**Task 12**~~ ✅ Done → **Task 13** — LLM level assessment
+4. **Nhóm D** (14→15→16→17) — Frontend web lesson viewer
 
 ## Quy tắc chung cho mọi agent
 
