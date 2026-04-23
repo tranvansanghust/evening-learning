@@ -583,7 +583,7 @@ class OnboardingService:
         first_lesson = None
         course_topic = state.course_topic or "General Learning"
         course_slug = course_topic.lower().replace(" ", "-")[:50]
-        curriculum = self.fetch_udemy_curriculum(course_slug)
+        curriculum = self._generate_curriculum_with_llm(course_topic)
         course = self.create_course_from_curriculum(
             course_name=course_topic,
             course_slug=course_slug,
@@ -599,6 +599,27 @@ class OnboardingService:
         self.db.commit()
 
         return first_lesson
+
+    def _generate_curriculum_with_llm(self, course_topic: str, num_lessons: int = 5) -> List[dict]:
+        """Generate lesson list for a course topic using LLM."""
+        try:
+            from app.config import settings
+            from app.services.llm_service import LLMService
+            llm = LLMService(
+                api_key=settings.llm_api_key,
+                base_url=settings.llm_base_url,
+                fast_model=settings.llm_fast_model,
+                smart_model=settings.llm_smart_model,
+            )
+            curriculum = llm.generate_curriculum(course_topic, num_lessons)
+            logger.info(f"LLM generated {len(curriculum)} lessons for '{course_topic}'")
+            return curriculum
+        except Exception as e:
+            logger.error(f"_generate_curriculum_with_llm failed, using fallback: {e}")
+            return [
+                {"sequence_number": i + 1, "title": f"{course_topic} — Phần {i + 1}", "description": ""}
+                for i in range(num_lessons)
+            ]
 
     def clear_state(self, user_id: int) -> None:
         """Delete onboarding state without any side effects (no course creation)."""

@@ -793,6 +793,17 @@ async def _handle_checkin(
         smart_model=settings.llm_smart_model,
     )
 
+    # Ensure content_markdown exists trước khi quiz (generate nếu chưa có)
+    if not lesson.content_markdown or lesson.content_markdown.startswith("```"):
+        from app.services.llm_content_generator import LLMContentGenerator
+        from app.models import Lesson as LessonModel
+        total_lessons = db.query(LessonModel).filter(LessonModel.course_id == enrollment.course_id).count()
+        generator = LLMContentGenerator(client=llm_service.client, smart_model=settings.llm_smart_model)
+        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+            await asyncio.to_thread(
+                lambda: generator.get_or_generate(lesson=lesson, course_topic=course_name, total_lessons=total_lessons, db=db)
+            )
+
     # Evaluate checkin trước — gửi nhận xét cho user
     async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
         feedback = await asyncio.to_thread(
@@ -845,8 +856,9 @@ async def _handle_quiz_answer(message: Message, text: str, active_session, db) -
     evaluation = result.get("evaluation", {})
     feedback = evaluation.get("feedback", "")
     next_action = result.get("next_action", "continue")
+    user_requested_end = result.get("user_requested_end", False)
 
-    if feedback:
+    if feedback and not user_requested_end:
         await message.answer(feedback)
 
     if next_action == "end":

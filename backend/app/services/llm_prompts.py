@@ -276,6 +276,26 @@ QUAN TRỌNG: Chỉ trả về JSON object, không có text khác."""
         return prompt
 
     @staticmethod
+    def curriculum_generation(course_topic: str, num_lessons: int = 5) -> str:
+        """Generate a lesson plan for a course topic."""
+        return f"""Tạo chương trình học {num_lessons} bài cho khóa học: "{course_topic}"
+
+Yêu cầu:
+- Mỗi bài có tiêu đề cụ thể, rõ ràng — KHÔNG dùng "Section N" hay "Phần N"
+- Tiêu đề mô tả đúng nội dung sẽ học trong bài đó
+- Progression tự nhiên: từ khái niệm cơ bản đến nâng cao
+- Bằng tiếng Việt
+
+Trả về JSON array:
+[
+  {{"sequence_number": 1, "title": "<tiêu đề bài 1>", "description": "<mô tả 1-2 câu về nội dung bài>"}},
+  {{"sequence_number": 2, "title": "<tiêu đề bài 2>", "description": "<mô tả>"}},
+  ...
+]
+
+Chỉ trả về JSON array, không có text khác."""
+
+    @staticmethod
     def checkin_question(lesson_title: str, lesson_content: str, course_topic: str = "") -> str:
         """Generate a dynamic, lesson-specific question to ask the user after /done."""
         content_preview = lesson_content[:800] if lesson_content else lesson_title

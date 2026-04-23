@@ -514,6 +514,28 @@ class LLMService:
             logger.error(f"evaluate_checkin failed: {e}")
             return ""
 
+    def generate_curriculum(self, course_topic: str, num_lessons: int = 5) -> List[dict]:
+        """Generate a list of lesson dicts (sequence_number, title, description) for a course topic."""
+        prompt = LLMPrompts.curriculum_generation(course_topic, num_lessons)
+        try:
+            msg = self.client.chat.completions.create(
+                model=self.FAST_MODEL,
+                max_tokens=1000,
+                messages=[
+                    {"role": "system", "content": "Tạo chương trình học theo yêu cầu. Chỉ trả về JSON array."},
+                    {"role": "user", "content": prompt},
+                ]
+            )
+            raw = msg.choices[0].message.content.strip()
+            raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+            return json.loads(raw)
+        except Exception as e:
+            logger.error(f"generate_curriculum failed: {e}")
+            return [
+                {"sequence_number": i + 1, "title": f"{course_topic} — Phần {i + 1}", "description": ""}
+                for i in range(num_lessons)
+            ]
+
     def suggest_next_courses(
         self,
         completed_course_name: str,

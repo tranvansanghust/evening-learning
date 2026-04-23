@@ -247,8 +247,13 @@ class QuizService:
             ).all()
             concept_names = [c.name for c in concepts] if concepts else [lesson.title]
 
-            # Get conversation history (may include _checkin metadata)
+            # Get conversation history (may include _checkin and _followup_count metadata)
             all_messages = quiz_session.messages or []
+
+            # Read consecutive followup count from metadata
+            followup_count = next(
+                (m.get("count", 0) for m in all_messages if m.get("role") == "_followup_count"), 0
+            )
 
             # Recover user_checkin stored as metadata and add as supplementary context only
             # stored_checkin does NOT override concept_names — course_topic is the anchor
@@ -322,12 +327,31 @@ class QuizService:
                     logger.error(f"Failed to decide next action for session {session_id}: {str(e)}")
                     raise
 
+            # Cap followup at 1 consecutive: if already followed up once, force CONTINUE
+            if next_action.action_type == ActionType.FOLLOWUP and followup_count >= 1:
+                next_action = NextAction(action_type=ActionType.CONTINUE, reason="Max followups reached, moving to new concept")
+                followup_count = 0
+            elif next_action.action_type == ActionType.FOLLOWUP:
+                followup_count += 1
+            else:
+                followup_count = 0
+
+            # Detect user-requested end (low engagement → engagement_level == "low")
+            user_requested_end = (
+                evaluation.engagement_level.value == "low"
+                and next_action.action_type == ActionType.END
+            )
+
             result = {
                 "evaluation": evaluation.model_dump(),
                 "next_action": next_action.action_type.value,
                 "reason": next_action.reason,
-                "question_count": question_count
+                "question_count": question_count,
+                "user_requested_end": user_requested_end,
             }
+            # Suppress feedback when user is ending — show summary directly
+            if user_requested_end:
+                result["evaluation"]["feedback"] = ""
 
             # Handle action
             if next_action.action_type == ActionType.END:
@@ -389,9 +413,10 @@ class QuizService:
                 result["next_question"] = next_question
                 logger.info(f"Quiz session {session_id}: Next question #{question_count + 1}")
 
-            # Update conversation history — re-attach _checkin metadata so it persists
+            # Update conversation history — re-attach metadata so it persists
             checkin_entries = [m for m in all_messages if m.get("role") == "_checkin"]
-            quiz_session.messages = checkin_entries + messages
+            followup_entries = [{"role": "_followup_count", "count": followup_count}]
+            quiz_session.messages = checkin_entries + followup_entries + messages
             db_session.commit()
 
             return result
