@@ -263,8 +263,8 @@ class QuizService:
             if stored_checkin:
                 lesson_content = f"{lesson_content}\n\nHọc viên mô tả nội dung học hôm nay: {stored_checkin}".strip()
 
-            # Exclude _checkin metadata from conversation history sent to LLM
-            messages = [m for m in all_messages if m.get("role") != "_checkin"]
+            # Exclude all metadata entries (roles starting with _) from LLM conversation history
+            messages = [m for m in all_messages if not m.get("role", "").startswith("_")]
 
             # Get the last question asked (should be the most recent assistant message)
             current_question = None
