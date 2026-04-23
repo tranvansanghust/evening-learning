@@ -30,7 +30,7 @@ def _build_lesson_url(lesson_id: int) -> str:
     return f"{settings.frontend_url}/lesson/{lesson_id}"
 
 
-async def _send_lesson_link(message: Message, lesson, course, db) -> None:
+async def _send_lesson_link(message: Message, lesson, course, db, previous_lesson=None) -> None:
     """Generate lesson content (if not cached) then send the lesson link.
 
     This is the single shared helper used by both cmd_today and onboarding
@@ -41,6 +41,7 @@ async def _send_lesson_link(message: Message, lesson, course, db) -> None:
         lesson: Lesson ORM object.
         course: Course ORM object (may be None).
         db: SQLAlchemy session.
+        previous_lesson: Previous lesson ORM object for recap line (may be None).
     """
     from app.models import Lesson
 
@@ -75,7 +76,9 @@ async def _send_lesson_link(message: Message, lesson, course, db) -> None:
 
     url = _build_lesson_url(lesson.lesson_id)
     course_prefix = f"{course.name} - " if course else ""
+    recap = f"_Bài trước: {previous_lesson.title}_\n\n" if previous_lesson else ""
     await message.answer(
+        f"{recap}"
         f"📖 *{course_prefix}Bài {lesson.sequence_number}: {lesson.title}*\n\n"
         f"[📚 Đọc bài học tại đây]({url})\n\n"
         f"Sau khi đọc xong, gõ /done để làm quiz ✍️",

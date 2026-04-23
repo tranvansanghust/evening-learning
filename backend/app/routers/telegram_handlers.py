@@ -193,7 +193,12 @@ async def cmd_today(message: Message) -> None:
             )
             return
 
-        await _send_lesson_link(message, lesson, course, db)
+        from app.models import Lesson as LessonModel
+        previous_lesson = db.query(LessonModel).filter(
+            LessonModel.course_id == lesson.course_id,
+            LessonModel.sequence_number == lesson.sequence_number - 1,
+        ).first()
+        await _send_lesson_link(message, lesson, course, db, previous_lesson=previous_lesson)
     except Exception as e:
         logger.error(f"Error in cmd_today for {telegram_id}: {e}", exc_info=True)
         await message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại!")
