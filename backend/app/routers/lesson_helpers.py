@@ -76,11 +76,11 @@ async def _send_lesson_link(message: Message, lesson, course, db, previous_lesso
 
     url = _build_lesson_url(lesson.lesson_id)
     course_prefix = f"{course.name} - " if course else ""
-    recap = f"_Bài trước: {previous_lesson.title}_\n\n" if previous_lesson else ""
+    recap = f"<i>Bài trước: {previous_lesson.title}</i>\n\n" if previous_lesson else ""
     await message.answer(
         f"{recap}"
-        f"📖 *{course_prefix}Bài {lesson.sequence_number}: {lesson.title}*\n\n"
-        f"[📚 Đọc bài học tại đây]({url})\n\n"
+        f"📖 <b>{course_prefix}Bài {lesson.sequence_number}: {lesson.title}</b>\n\n"
+        f'<a href="{url}">📚 Đọc bài học tại đây</a>\n\n'
         f"Sau khi đọc xong, gõ /done để làm quiz ✍️",
-        parse_mode="Markdown",
+        parse_mode="HTML",
     )
