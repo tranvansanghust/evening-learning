@@ -5,9 +5,11 @@ Shared between cmd_today and onboarding completion to avoid duplicating
 content-generation + link-sending logic.
 """
 
+import asyncio
 import logging
 
 from aiogram.types import Message
+from aiogram.utils.chat_action import ChatActionSender
 
 from app.config import settings
 from app.services.llm_content_generator import LLMContentGenerator
@@ -59,12 +61,15 @@ async def _send_lesson_link(message: Message, lesson, course, db) -> None:
 
     course_topic = course.name if course else lesson.title
     try:
-        generator.get_or_generate(
-            lesson=lesson,
-            course_topic=course_topic,
-            total_lessons=total_lessons,
-            db=db,
-        )
+        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+            await asyncio.to_thread(
+                lambda: generator.get_or_generate(
+                    lesson=lesson,
+                    course_topic=course_topic,
+                    total_lessons=total_lessons,
+                    db=db,
+                )
+            )
     except Exception as e:
         logger.warning(f"_send_lesson_link: content generation failed (fallback used): {e}")
 

@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
-from app.models import QuizSession, QuizAnswer, QuizSummary, Lesson, Concept, User
+from app.models import QuizSession, QuizAnswer, QuizSummary, Lesson, Concept, User, Course
 from app.services.llm_service import LLMService, AnswerEvaluation, ActionType, NextAction
 
 logger = logging.getLogger(__name__)
@@ -104,6 +104,10 @@ class QuizService:
             if not lesson:
                 raise ValueError(f"Lesson {lesson_id} not found")
 
+            # Load course to get topic anchor
+            course = db_session.query(Course).filter(Course.course_id == lesson.course_id).first()
+            course_topic = course.name if course else lesson.title
+
             # Load concepts for this lesson
             concepts = db_session.query(Concept).filter(
                 Concept.lesson_id == lesson_id
@@ -128,16 +132,11 @@ class QuizService:
             session_id = quiz_session.session_id
             logger.info(f"Created quiz session {session_id} for user {user_id}, lesson {lesson_id}")
 
-            # Build lesson context — user_checkin is the primary source of truth for what was learned
-            lesson_content = lesson.description or ""
-            if lesson.content_url:
-                lesson_content += f"\n\nContent URL: {lesson.content_url}"
+            # Build lesson context — prefer content_markdown (task 14), fallback to description
+            lesson_content = lesson.content_markdown or lesson.description or f"Bài học về {course_topic}: {lesson.title}"
             if user_checkin:
-                # Prepend checkin so LLM focuses on what the user actually studied today
-                lesson_content = f"Học viên tự mô tả nội dung đã học hôm nay: {user_checkin}\n\n{lesson_content}".strip()
-                # If concept_names is just a generic fallback, replace with checkin text
-                if concept_names == [lesson.title]:
-                    concept_names = [user_checkin]
+                # user_checkin is supplementary context only — does NOT override concept_names
+                lesson_content = f"{lesson_content}\n\nHọc viên mô tả nội dung học hôm nay: {user_checkin}".strip()
 
             # Build conversation history (empty for first question)
             conversation_history = []
@@ -148,7 +147,8 @@ class QuizService:
                     lesson_content=lesson_content,
                     conversation_history=conversation_history,
                     concepts=concept_names,
-                    is_first_question=True
+                    is_first_question=True,
+                    course_topic=course_topic
                 )
             except Exception as e:
                 logger.error(f"Failed to generate first question for session {session_id}: {str(e)}")
@@ -233,7 +233,13 @@ class QuizService:
 
             # Load lesson for context
             lesson = quiz_session.lesson
-            lesson_content = lesson.description or ""
+
+            # Load course to get topic anchor
+            course = db_session.query(Course).filter(Course.course_id == lesson.course_id).first()
+            course_topic = course.name if course else lesson.title
+
+            # Build lesson context — prefer content_markdown, fallback to description
+            lesson_content = lesson.content_markdown or lesson.description or f"Bài học về {course_topic}: {lesson.title}"
 
             # Load concepts
             concepts = db_session.query(Concept).filter(
@@ -244,14 +250,13 @@ class QuizService:
             # Get conversation history (may include _checkin metadata)
             all_messages = quiz_session.messages or []
 
-            # Recover user_checkin stored as metadata and enrich lesson_content
+            # Recover user_checkin stored as metadata and add as supplementary context only
+            # stored_checkin does NOT override concept_names — course_topic is the anchor
             stored_checkin = next(
                 (m["content"] for m in all_messages if m.get("role") == "_checkin"), None
             )
             if stored_checkin:
-                lesson_content = f"Học viên tự mô tả nội dung đã học: {stored_checkin}\n\n{lesson_content}".strip()
-                if concept_names == [lesson.title]:
-                    concept_names = [stored_checkin]
+                lesson_content = f"{lesson_content}\n\nHọc viên mô tả nội dung học hôm nay: {stored_checkin}".strip()
 
             # Exclude _checkin metadata from conversation history sent to LLM
             messages = [m for m in all_messages if m.get("role") != "_checkin"]
@@ -270,7 +275,8 @@ class QuizService:
                     question=current_question,
                     user_answer=user_answer,
                     lesson_context=lesson_content,
-                    concepts=concept_names
+                    concepts=concept_names,
+                    course_topic=course_topic
                 )
             except Exception as e:
                 logger.error(f"Failed to evaluate answer for session {session_id}: {str(e)}")
@@ -354,7 +360,8 @@ class QuizService:
                             lesson_content=lesson_content,
                             conversation_history=messages,
                             concepts=concept_names,
-                            is_first_question=False
+                            is_first_question=False,
+                            course_topic=course_topic
                         )
                     except Exception as e:
                         logger.error(f"Failed to generate follow-up for session {session_id}: {str(e)}")
@@ -371,7 +378,8 @@ class QuizService:
                         lesson_content=lesson_content,
                         conversation_history=messages,
                         concepts=concept_names,
-                        is_first_question=False
+                        is_first_question=False,
+                        course_topic=course_topic
                     )
                 except Exception as e:
                     logger.error(f"Failed to generate next question for session {session_id}: {str(e)}")

@@ -21,7 +21,8 @@ class LLMPrompts:
         lesson_content: str,
         conversation_history: List[Dict[str, str]],
         concepts: List[str],
-        is_first_question: bool = True
+        is_first_question: bool = True,
+        course_topic: str = ""
     ) -> str:
         """
         Generate prompt for creating a new quiz question.
@@ -31,6 +32,7 @@ class LLMPrompts:
             conversation_history: List of previous Q&A pairs
             concepts: List of concept names to test
             is_first_question: Whether this is the first question
+            course_topic: The course topic/name (anchor for questions)
 
         Returns:
             str: The formatted prompt for Claude
@@ -40,7 +42,8 @@ class LLMPrompts:
             ...     lesson_content="SQL is...",
             ...     conversation_history=[],
             ...     concepts=["JOIN", "WHERE"],
-            ...     is_first_question=True
+            ...     is_first_question=True,
+            ...     course_topic="SQL Basics"
             ... )
         """
         history_section = ""
@@ -52,9 +55,10 @@ class LLMPrompts:
             history_section += "\n"
 
         concepts_section = ", ".join(concepts)
+        topic_section = f'về "{course_topic}" ' if course_topic else ""
 
         if is_first_question:
-            prompt = f"""Tạo một câu hỏi ôn tập bằng tiếng Việt cho học viên vừa học xong bài sau:
+            prompt = f"""Tạo một câu hỏi ôn tập {topic_section}bằng tiếng Việt cho học viên vừa học xong bài sau:
 
 ---
 {lesson_content}
@@ -63,6 +67,7 @@ class LLMPrompts:
 Khái niệm cần kiểm tra: {concepts_section}
 
 Yêu cầu cho câu hỏi:
+- Câu hỏi PHẢI liên quan đến chủ đề "{course_topic}" nếu được cung cấp
 - Hỏi về một trong các khái niệm trên
 - Câu hỏi mở, không phải trắc nghiệm
 - Ngắn gọn, thân thiện
@@ -70,7 +75,7 @@ Yêu cầu cho câu hỏi:
 
 Chỉ trả về câu hỏi, không thêm bất kỳ text nào khác."""
         else:
-            prompt = f"""Tạo câu hỏi ôn tập tiếp theo bằng tiếng Việt.
+            prompt = f"""Tạo câu hỏi ôn tập {topic_section}tiếp theo bằng tiếng Việt.
 
 Nội dung bài học:
 ---
@@ -81,6 +86,7 @@ Khái niệm cần kiểm tra: {concepts_section}
 
 {history_section}
 Yêu cầu:
+- Câu hỏi PHẢI liên quan đến chủ đề "{course_topic}" nếu được cung cấp
 - Hỏi về khái niệm chưa được đề cập trong lịch sử hội thoại
 - Tiếp nối tự nhiên với câu trả lời trước
 - Câu hỏi mở, khuyến khích giải thích
@@ -95,7 +101,8 @@ Chỉ trả về câu hỏi, không thêm bất kỳ text nào khác."""
         question: str,
         user_answer: str,
         lesson_context: str,
-        concepts: List[str]
+        concepts: List[str],
+        course_topic: str = ""
     ) -> str:
         """
         Generate prompt for evaluating a user's answer.
@@ -105,13 +112,19 @@ Chỉ trả về câu hỏi, không thêm bất kỳ text nào khác."""
             user_answer: The user's response
             lesson_context: The lesson content for context
             concepts: Key concepts being tested
+            course_topic: The course topic/name for off-topic validation
 
         Returns:
             str: The formatted prompt for Claude
         """
         concepts_str = ", ".join(concepts)
+        topic_section = f"\nKHÓA HỌC: {course_topic}" if course_topic else ""
+        topic_validation = (
+            f'\nQUAN TRỌNG: Nếu câu trả lời không liên quan đến khóa học "{course_topic}", '
+            f'hãy đặt is_correct=false và feedback nhắc học viên trả lời đúng chủ đề "{course_topic}".'
+        ) if course_topic else ""
 
-        prompt = f"""Đánh giá câu trả lời của học viên dựa trên nội dung bài học.
+        prompt = f"""Đánh giá câu trả lời của học viên dựa trên nội dung bài học.{topic_section}
 
 NỘI DUNG BÀI HỌC:
 {lesson_context}
@@ -123,7 +136,7 @@ CÂU HỎI:
 
 CÂU TRẢ LỜI CỦA HỌC VIÊN:
 {user_answer}
-
+{topic_validation}
 Trả về JSON object:
 {{
   "is_correct": <true/false - câu trả lời có đúng về cơ bản không?>,
@@ -136,7 +149,8 @@ Trả về JSON object:
 
 Hướng dẫn:
 - Chấp nhận hiểu biết một phần là đúng nếu nắm được ý chính
-- low = trả lời sơ sài, medium = trả lời đủ ý, high = giải thích chi tiết và sâu
+- low = trả lời sơ sài / không liên quan / muốn kết thúc, medium = trả lời đủ ý, high = giải thích chi tiết và sâu
+- Nếu học viên tỏ ý muốn kết thúc (ví dụ: "thôi", "kết thúc", "xong rồi", "stop", "enough"): đặt engagement_level="low", is_correct=false
 - Phản hồi bằng tiếng Việt
 - Chỉ trả về JSON, không có markdown hay text khác
 
@@ -188,7 +202,8 @@ Trả về JSON object:
 Hướng dẫn:
 - "continue": học viên trả lời tốt → hỏi về khái niệm khác
 - "followup": học viên còn nhầm hoặc trả lời sơ sài → hỏi thêm để làm rõ
-- "end": học viên hiểu tốt HOẶC đã đạt giới hạn số câu hỏi
+- "end": học viên hiểu tốt HOẶC đã đạt giới hạn số câu hỏi HOẶC engagement_level="low"
+- Nếu engagement_level="low": luôn chọn "end" — học viên không muốn tiếp tục
 - Thông thường hỏi 3-5 câu rồi kết thúc
 - follow_up_question phải bằng tiếng Việt
 

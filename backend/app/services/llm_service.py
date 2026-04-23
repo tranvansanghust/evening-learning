@@ -140,7 +140,8 @@ class LLMService:
         lesson_content: str,
         conversation_history: List[Dict[str, str]],
         concepts: List[str],
-        is_first_question: bool = True
+        is_first_question: bool = True,
+        course_topic: str = ""
     ) -> str:
         """
         Generate a natural conversational quiz question.
@@ -179,7 +180,8 @@ class LLMService:
             lesson_content=lesson_content,
             conversation_history=conversation_history,
             concepts=concepts,
-            is_first_question=is_first_question
+            is_first_question=is_first_question,
+            course_topic=course_topic
         )
 
         try:
@@ -214,7 +216,8 @@ class LLMService:
         question: str,
         user_answer: str,
         lesson_context: str,
-        concepts: List[str]
+        concepts: List[str],
+        course_topic: str = ""
     ) -> AnswerEvaluation:
         """
         Evaluate if a user's answer is correct and extract insights.
@@ -251,7 +254,8 @@ class LLMService:
             question=question,
             user_answer=user_answer,
             lesson_context=lesson_context,
-            concepts=concepts
+            concepts=concepts,
+            course_topic=course_topic
         )
 
         try:

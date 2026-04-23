@@ -17,6 +17,7 @@ Handlers integrate with backend services to provide actual functionality
 for learning, quizzes, progress tracking, and more.
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional
@@ -24,6 +25,7 @@ from typing import Optional
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.utils.chat_action import ChatActionSender
 from sqlalchemy.orm import Session
 
 from app.services.onboarding_service import OnboardingService
@@ -177,7 +179,8 @@ async def cmd_today(message: Message) -> None:
                     client=llm_client.client,
                     fast_model=settings.llm_fast_model,
                 )
-                suggestions = suggester.suggest_next_topics(course.name)
+                async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+                    suggestions = await asyncio.to_thread(suggester.suggest_next_topics, course.name)
                 next_msg = f"\n\n🎯 <b>Bạn có thể học tiếp:</b>\n{suggestions}"
             except Exception as llm_err:
                 logger.warning(f"LLM suggest_next_topics failed (ignored): {llm_err}")
@@ -244,14 +247,25 @@ async def cmd_done(message: Message) -> None:
         enrollment.last_activity_at = datetime.utcnow()
         db.commit()
 
-        await message.answer(
-            "Tốt lắm! 🎉\n\n"
-            "Hôm nay bạn học được gì?\n\n"
-            "Kể mình nghe:\n"
-            "• Bạn vừa học bài gì?\n"
-            "• Hiểu được những khái niệm gì?\n"
-            "• Phần nào còn chưa rõ?"
-        )
+        # Load current lesson để personalise message
+        lesson = get_current_lesson(user.user_id, enrollment.course_id, db)
+        if lesson:
+            await message.answer(
+                f"Tốt lắm! Bạn vừa học xong *{lesson.title}* 🎉\n\n"
+                f"Kể mình nghe về bài này:\n"
+                f"• Bạn hiểu được những gì từ bài *{lesson.title}*?\n"
+                f"• Có phần nào còn chưa rõ không?\n\n"
+                f"_Trả lời càng chi tiết, quiz càng sát với những gì bạn vừa học._",
+                parse_mode="Markdown",
+            )
+        else:
+            await message.answer(
+                "Tốt lắm! 🎉\n\n"
+                "Hôm nay bạn học được gì?\n\n"
+                "Kể mình nghe:\n"
+                "• Hiểu được những khái niệm gì?\n"
+                "• Phần nào còn chưa rõ?"
+            )
     except Exception as e:
         logger.error(f"Error in cmd_done for {telegram_id}: {e}", exc_info=True)
         await message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại!")
@@ -298,7 +312,7 @@ async def cmd_cancel(message: Message) -> None:
 
 @router.message(Command("progress"))
 async def cmd_progress(message: Message) -> None:
-    from app.models import User
+    from app.models import User, UserCourse, Course
 
     telegram_id = str(message.from_user.id)
     db = SessionLocal()
@@ -307,8 +321,25 @@ async def cmd_progress(message: Message) -> None:
         if not user:
             await message.answer("Bạn chưa có tài khoản. Gõ /start để bắt đầu!")
             return
+
+        # Header: đang học bài gì
+        header = ""
+        enrollment = (
+            db.query(UserCourse)
+            .filter(UserCourse.user_id == user.user_id, UserCourse.status == "IN_PROGRESS")
+            .first()
+        )
+        if enrollment:
+            course = db.query(Course).filter(Course.course_id == enrollment.course_id).first()
+            lesson = get_current_lesson(user.user_id, enrollment.course_id, db)
+            course_name = course.name if course else "khoá học"
+            if lesson:
+                header = f"📌 <b>{course_name}</b>\nBài đang học: <b>{lesson.title}</b>\n\n"
+            else:
+                header = f"📌 <b>{course_name}</b> — Đã hoàn thành! 🎉\n\n"
+
         progress = ProgressService.get_user_progress(user.user_id, db_session=db)
-        await message.answer(format_progress(progress), parse_mode="HTML")
+        await message.answer(header + format_progress(progress), parse_mode="HTML")
     except Exception as e:
         logger.error(f"Error in cmd_progress: {e}", exc_info=True)
         await message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại!")
@@ -318,7 +349,7 @@ async def cmd_progress(message: Message) -> None:
 
 @router.message(Command("review"))
 async def cmd_review(message: Message) -> None:
-    from app.models import User
+    from app.models import User, UserCourse, Course
 
     telegram_id = str(message.from_user.id)
     text = (message.text or "").strip()
@@ -331,6 +362,20 @@ async def cmd_review(message: Message) -> None:
         if not user:
             await message.answer("Bạn chưa có tài khoản. Gõ /start để bắt đầu!")
             return
+
+        # Header: đang học bài gì
+        header = ""
+        enrollment = (
+            db.query(UserCourse)
+            .filter(UserCourse.user_id == user.user_id, UserCourse.status == "IN_PROGRESS")
+            .first()
+        )
+        if enrollment:
+            course = db.query(Course).filter(Course.course_id == enrollment.course_id).first()
+            lesson = get_current_lesson(user.user_id, enrollment.course_id, db)
+            course_name = course.name if course else "khoá học"
+            if lesson:
+                header = f"📌 <b>{course_name}</b> — Bài đang học: <b>{lesson.title}</b>\n\n"
 
         progress_service = ProgressService(db)
         if topic:
@@ -346,7 +391,7 @@ async def cmd_review(message: Message) -> None:
         else:
             summaries = progress_service.get_quiz_summaries(user.user_id, db_session=db)
 
-        await message.answer(format_quiz_list(summaries), parse_mode="HTML")
+        await message.answer(header + format_quiz_list(summaries), parse_mode="HTML")
     except Exception as e:
         logger.error(f"Error in cmd_review: {e}", exc_info=True)
         await message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại!")
@@ -356,8 +401,8 @@ async def cmd_review(message: Message) -> None:
 
 @router.message(Command("reset"))
 async def cmd_reset(message: Message) -> None:
-    """Reset user state: clear active quiz, checkin_pending, and onboarding state."""
-    from app.models import User, QuizSession
+    """Reset toàn bộ: quiz, checkin, onboarding, và course enrollment."""
+    from app.models import User, QuizSession, UserCourse
 
     telegram_id = str(message.from_user.id)
     db = SessionLocal()
@@ -392,12 +437,23 @@ async def cmd_reset(message: Message) -> None:
             onboarding_service.clear_state(user.user_id)
             cleared.append("trạng thái onboarding")
 
+        # Clear course enrollments
+        enrollments = (
+            db.query(UserCourse)
+            .filter(UserCourse.user_id == user.user_id)
+            .all()
+        )
+        if enrollments:
+            for e in enrollments:
+                db.delete(e)
+            cleared.append(f"{len(enrollments)} khoá học")
+
         db.commit()
 
         if cleared:
             await message.answer(
                 f"✅ Đã reset: {', '.join(cleared)}.\n\n"
-                "Gõ /start để bắt đầu lại, hoặc /today để xem bài học."
+                "Gõ /start để chọn khoá học mới!"
             )
         else:
             await message.answer("Không có trạng thái nào cần reset.")
@@ -410,12 +466,62 @@ async def cmd_reset(message: Message) -> None:
 
 @router.message(Command("resume"))
 async def cmd_resume(message: Message) -> None:
-    await message.answer("▶️ Quay lại học tiếp thôi! 💪")
+    from app.models import User, UserCourse, Course
+
+    telegram_id = str(message.from_user.id)
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        if not user:
+            await message.answer("Bạn chưa có tài khoản. Gõ /start để bắt đầu!")
+            return
+        enrollment = (
+            db.query(UserCourse)
+            .filter(UserCourse.user_id == user.user_id, UserCourse.status == "IN_PROGRESS")
+            .first()
+        )
+        if not enrollment:
+            await message.answer("Bạn chưa có khoá học nào đang học. Gõ /start để bắt đầu!")
+            return
+        course = db.query(Course).filter(Course.course_id == enrollment.course_id).first()
+        lesson = get_current_lesson(user.user_id, enrollment.course_id, db)
+        course_name = course.name if course else "khoá học"
+        if lesson:
+            await message.answer(
+                f"▶️ Tiếp tục học *{course_name}* thôi! 💪\n\n"
+                f"Bài tiếp theo: *{lesson.title}*\n\n"
+                "Gõ /today để xem bài học.",
+                parse_mode="Markdown",
+            )
+        else:
+            await message.answer(f"▶️ Quay lại *{course_name}* thôi! Gõ /today để tiếp tục.", parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Error in cmd_resume: {e}", exc_info=True)
+        await message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại!")
+    finally:
+        db.close()
 
 
 @router.message(Command("pause"))
 async def cmd_pause(message: Message) -> None:
-    await message.answer("⏸ Đã tạm dừng nhắc nhở. Gõ /resume để tiếp tục.")
+    from app.models import User
+
+    telegram_id = str(message.from_user.id)
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        reminder = getattr(user, "reminder_time", None) if user else None
+        if reminder:
+            await message.answer(
+                f"⏸ Đã tạm dừng nhắc nhở (thường nhắc lúc {reminder}).\n\nGõ /resume để tiếp tục học."
+            )
+        else:
+            await message.answer("⏸ Đã tạm dừng nhắc nhở.\n\nGõ /resume để tiếp tục học.")
+    except Exception as e:
+        logger.error(f"Error in cmd_pause: {e}", exc_info=True)
+        await message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại!")
+    finally:
+        db.close()
 
 
 @router.message(Command("help"))
@@ -506,7 +612,8 @@ async def _handle_onboarding_step(
             smart_model=settings.llm_smart_model,
         )
         assessor = LLMAssessmentGenerator(client=llm.client, fast_model=settings.llm_fast_model)
-        questions = assessor.generate_assessment_questions(text)
+        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+            questions = await asyncio.to_thread(assessor.generate_assessment_questions, text)
 
         onboarding_service.update_onboarding_state(
             user_id=user_id,
@@ -593,6 +700,17 @@ async def _handle_onboarding_step(
         await message.answer("Gõ /help để xem các lệnh có sẵn.")
 
 
+def _is_off_topic(checkin: str, course_name: str, lesson_title: str) -> bool:
+    """True nếu checkin không có từ nào liên quan đến course/lesson."""
+    checkin_lower = checkin.lower()
+    # Lấy các từ có nghĩa (>= 3 ký tự) từ course_name và lesson_title
+    topic_words = {
+        w.lower() for w in (course_name + " " + lesson_title).split()
+        if len(w) >= 3
+    }
+    return len(topic_words) > 0 and not any(w in checkin_lower for w in topic_words)
+
+
 def _parse_deadline(text: str):
     """Parse deadline từ text: '3 months', '1 month', hoặc 'YYYY-MM-DD'."""
     from datetime import date, timedelta
@@ -642,15 +760,20 @@ async def _handle_checkin(
         await message.answer("Bạn chưa có khoá học. Gõ /start để bắt đầu!")
         return
 
-    lesson = (
-        db.query(Lesson)
-        .filter(Lesson.course_id == enrollment.course_id)
-        .order_by(Lesson.sequence_number)
-        .first()
-    )
+    lesson = get_current_lesson(user_id, enrollment.course_id, db)
     if not lesson:
-        await message.answer("Chưa có bài học nào trong khoá. Liên hệ admin nhé!")
+        await message.answer("Bạn đã hoàn thành tất cả bài học rồi! Gõ /today để xem tổng kết.")
         return
+
+    # Nhắc nhẹ nếu checkin lạc đề
+    from app.models import Course
+    course = db.query(Course).filter(Course.course_id == enrollment.course_id).first()
+    course_name = course.name if course else ""
+    if _is_off_topic(text, course_name, lesson.title):
+        await message.answer(
+            f"_Bài hôm nay là *{lesson.title}* ({course_name}) — mình sẽ quiz bạn về nội dung đó nhé 😄_",
+            parse_mode="Markdown",
+        )
 
     # Xoá checkin_pending trước khi start quiz
     user.checkin_pending = False
@@ -663,15 +786,19 @@ async def _handle_checkin(
         smart_model=settings.llm_smart_model,
     )
     quiz_service = QuizService(llm_service)
-    result = quiz_service.start_quiz(
-        user_id=user_id,
-        lesson_id=lesson.lesson_id,
-        user_checkin=text,
-        db_session=db,
-    )
+    async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+        result = await asyncio.to_thread(
+            lambda: quiz_service.start_quiz(
+                user_id=user_id,
+                lesson_id=lesson.lesson_id,
+                user_checkin=text,
+                db_session=db,
+            )
+        )
 
     await message.answer(
-        f"Bắt đầu quiz! 📝\n\n{result['first_question']}"
+        f"Quiz *{lesson.title}* bắt đầu! 📝\n\n{result['first_question']}",
+        parse_mode="Markdown",
     )
 
 
@@ -686,11 +813,14 @@ async def _handle_quiz_answer(message: Message, text: str, active_session, db) -
         smart_model=settings.llm_smart_model,
     )
     quiz_service = QuizService(llm_service)
-    result = quiz_service.submit_answer(
-        session_id=active_session.session_id,
-        user_answer=text,
-        db_session=db,
-    )
+    async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+        result = await asyncio.to_thread(
+            lambda: quiz_service.submit_answer(
+                session_id=active_session.session_id,
+                user_answer=text,
+                db_session=db,
+            )
+        )
 
     evaluation = result.get("evaluation", {})
     feedback = evaluation.get("feedback", "")
