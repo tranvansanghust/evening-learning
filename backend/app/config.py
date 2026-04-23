@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     db_name: str = "evening_learning"
 
     # Telegram Bot Configuration
-    telegram_bot_token: str = "8618965675:AAHr3z_bsDl8iJ7Glq8VadtneJo2LlGVnbA"
+    telegram_bot_token: str = ""
     telegram_webhook_url: str = ""
 
     # LLM Configuration (OpenAI-compatible)

@@ -1,0 +1,23 @@
+[Unit]
+Description=Evening Learning API
+After=network.target mysql.service
+Requires=mysql.service
+
+[Service]
+User=deploy
+Group=deploy
+WorkingDirectory=/opt/evening-learning/backend
+Environment="PATH=/opt/evening-learning/backend/venv/bin"
+EnvironmentFile=/opt/evening-learning/backend/.env
+ExecStart=/opt/evening-learning/backend/venv/bin/uvicorn app.main:app \
+    --host 127.0.0.1 \
+    --port 8000 \
+    --workers 2 \
+    --access-log
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

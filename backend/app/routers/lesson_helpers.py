@@ -80,7 +80,7 @@ async def _send_lesson_link(message: Message, lesson, course, db, previous_lesso
     await message.answer(
         f"{recap}"
         f"📖 <b>{course_prefix}Bài {lesson.sequence_number}: {lesson.title}</b>\n\n"
-        f'<a href="{url}">📚 Đọc bài học tại đây</a>\n\n'
+        f'📚 <a href="{url}">Đọc bài học tại đây</a>\n\n'
         f"Sau khi đọc xong, gõ /done để làm quiz ✍️",
         parse_mode="HTML",
     )

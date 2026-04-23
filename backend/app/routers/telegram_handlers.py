@@ -389,9 +389,8 @@ async def cmd_review(message: Message) -> None:
             if lesson:
                 header = f"📌 <b>{course_name}</b> — Bài đang học: <b>{lesson.title}</b>\n\n"
 
-        progress_service = ProgressService(db)
         if topic:
-            summaries = progress_service.get_review_by_topic(
+            summaries = ProgressService.get_review_by_topic(
                 user_id=user.user_id, topic=topic, db_session=db
             )
             if not summaries:
@@ -401,7 +400,7 @@ async def cmd_review(message: Message) -> None:
                 )
                 return
         else:
-            summaries = progress_service.get_quiz_summaries(user.user_id, db_session=db)
+            summaries = ProgressService.get_quiz_summaries(user.user_id, db_session=db)
 
         await message.answer(header + format_quiz_list(summaries), parse_mode="HTML")
     except Exception as e:

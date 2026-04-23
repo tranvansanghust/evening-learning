@@ -172,11 +172,11 @@ class ProgressService:
 
         logger.info(f"Getting quiz summaries for user {user_id}")
 
-        # Query all quiz summaries for this user
+        # Query all quiz summaries for this user via QuizSession
         summaries = (
             db_session.query(QuizSummary)
-            .join(UserCourse, UserCourse.user_course_id == QuizSummary.user_course_id)
-            .filter(UserCourse.user_id == user_id)
+            .join(QuizSession, QuizSession.session_id == QuizSummary.session_id)
+            .filter(QuizSession.user_id == user_id)
             .order_by(QuizSummary.created_at.desc())
             .all()
         )
@@ -307,15 +307,13 @@ class ProgressService:
 
         logger.info(f"Getting quiz summaries for topic '{topic}' for user {user_id}")
 
-        # Query summaries filtered by topic
+        # Query summaries filtered by topic via QuizSession
         summaries = (
             db_session.query(QuizSummary)
-            .join(UserCourse, UserCourse.user_course_id == QuizSummary.user_course_id)
             .join(QuizSession, QuizSession.session_id == QuizSummary.session_id)
             .join(Lesson, Lesson.lesson_id == QuizSession.lesson_id)
             .filter(
-                UserCourse.user_id == user_id,
-                # Filter by lesson title containing topic (case-insensitive)
+                QuizSession.user_id == user_id,
                 Lesson.title.ilike(f"%{topic}%"),
             )
             .order_by(QuizSummary.created_at.desc())
