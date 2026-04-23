@@ -276,6 +276,27 @@ QUAN TRỌNG: Chỉ trả về JSON object, không có text khác."""
         return prompt
 
     @staticmethod
+    def course_title_normalization(raw_input: str) -> str:
+        """Normalize free-form user input into a clean course title."""
+        return f"""Chuẩn hóa input sau thành tên khóa học ngắn gọn (2-5 từ).
+
+Input: "{raw_input}"
+
+Yêu cầu:
+- Loại bỏ các cụm thừa: "tôi muốn học", "học về", "muốn học", "tìm hiểu về"
+- Viết hoa chữ cái đầu mỗi từ quan trọng
+- Giữ tên công nghệ đúng chuẩn: Kubernetes, React.js, Python, Docker, v.v.
+- Tối đa 5 từ, tiếng Việt hoặc Anh tùy ngữ cảnh
+
+Ví dụ:
+- "tôi muốn học về K8s" → "Kubernetes Cơ Bản"
+- "học kubernetes cho devops" → "Kubernetes cho DevOps"
+- "piano từ đầu" → "Piano Từ Đầu"
+- "react js" → "React.js"
+
+Chỉ trả về tên khóa học, không có gì khác."""
+
+    @staticmethod
     def curriculum_generation(course_topic: str, num_lessons: int = 5) -> str:
         """Generate a lesson plan for a course topic."""
         return f"""Tạo chương trình học {num_lessons} bài cho khóa học: "{course_topic}"

@@ -514,6 +514,24 @@ class LLMService:
             logger.error(f"evaluate_checkin failed: {e}")
             return ""
 
+    def normalize_course_title(self, raw_input: str) -> str:
+        """Normalize free-form topic input into a clean course title. Falls back to title-case."""
+        prompt = LLMPrompts.course_title_normalization(raw_input)
+        try:
+            msg = self.client.chat.completions.create(
+                model=self.FAST_MODEL,
+                max_tokens=30,
+                messages=[
+                    {"role": "system", "content": "Chỉ trả về tên khóa học đã chuẩn hóa, không có gì khác."},
+                    {"role": "user", "content": prompt},
+                ]
+            )
+            result = msg.choices[0].message.content.strip().strip('"').strip("'")
+            return result if result else raw_input.title()
+        except Exception as e:
+            logger.error(f"normalize_course_title failed: {e}")
+            return raw_input.title()
+
     def generate_curriculum(self, course_topic: str, num_lessons: int = 5) -> List[dict]:
         """Generate a list of lesson dicts (sequence_number, title, description) for a course topic."""
         prompt = LLMPrompts.curriculum_generation(course_topic, num_lessons)

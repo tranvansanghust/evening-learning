@@ -620,11 +620,14 @@ async def _handle_onboarding_step(
         )
         assessor = LLMAssessmentGenerator(client=llm.client, fast_model=settings.llm_fast_model)
         async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
-            questions = await asyncio.to_thread(assessor.generate_assessment_questions, text)
+            normalized_title, questions = await asyncio.gather(
+                asyncio.to_thread(llm.normalize_course_title, text),
+                asyncio.to_thread(assessor.generate_assessment_questions, text),
+            )
 
         onboarding_service.update_onboarding_state(
             user_id=user_id,
-            course_topic=text,
+            course_topic=normalized_title,
             current_step="q1",
             q1_text=questions["q1"],
             q2_text_if_no=questions["q2_if_no"],
