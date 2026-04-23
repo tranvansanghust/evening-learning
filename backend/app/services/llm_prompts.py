@@ -276,6 +276,48 @@ QUAN TRỌNG: Chỉ trả về JSON object, không có text khác."""
         return prompt
 
     @staticmethod
+    def checkin_question(lesson_title: str, lesson_content: str, course_topic: str = "") -> str:
+        """Generate a dynamic, lesson-specific question to ask the user after /done."""
+        content_preview = lesson_content[:800] if lesson_content else lesson_title
+        topic_line = f"KHÓA HỌC: {course_topic}\n" if course_topic else ""
+        return f"""Bạn là giáo viên thân thiện. Học viên vừa đọc xong bài học dưới đây.
+{topic_line}BÀI HỌC: {lesson_title}
+NỘI DUNG (tóm tắt):
+{content_preview}
+
+Tạo MỘT câu hỏi ngắn (1-3 dòng) bằng tiếng Việt để hỏi học viên vừa học được gì và còn thắc mắc gì.
+Câu hỏi phải:
+- Cụ thể với nội dung bài (không hỏi chung chung)
+- Khuyến khích học viên kể lại theo cách hiểu của họ
+- Thân thiện, tự nhiên
+
+Chỉ trả về câu hỏi, không có phần mở đầu hay giải thích."""
+
+    @staticmethod
+    def checkin_evaluation(
+        checkin_text: str,
+        lesson_title: str,
+        lesson_content: str,
+        course_topic: str = ""
+    ) -> str:
+        """Evaluate user's checkin description and return brief feedback."""
+        content_preview = lesson_content[:800] if lesson_content else lesson_title
+        topic_line = f"KHÓA HỌC: {course_topic}\n" if course_topic else ""
+        return f"""Học viên vừa mô tả lại những gì họ học được từ bài học.
+{topic_line}BÀI HỌC: {lesson_title}
+NỘI DUNG BÀI HỌC:
+{content_preview}
+
+MÔ TẢ CỦA HỌC VIÊN: {checkin_text}
+
+Đưa ra nhận xét ngắn (2-3 câu) bằng tiếng Việt:
+- Họ hiểu đúng điểm gì
+- Điểm nào còn thiếu hoặc chưa chính xác (nếu có)
+- Tone: ấm áp, động viên — không phán xét
+
+Chỉ trả về nhận xét, không có phần mở đầu hay tiêu đề."""
+
+    @staticmethod
     def suggest_next_courses(
         completed_course_name: str,
         user_level: int,

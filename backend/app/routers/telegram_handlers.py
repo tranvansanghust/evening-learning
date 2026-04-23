@@ -250,22 +250,29 @@ async def cmd_done(message: Message) -> None:
         # Load current lesson để personalise message
         lesson = get_current_lesson(user.user_id, enrollment.course_id, db)
         if lesson:
+            from app.config import settings
+            from app.models import Course
+            course = db.query(Course).filter(Course.course_id == enrollment.course_id).first()
+            course_topic = course.name if course else ""
+            llm_service = LLMService(
+                api_key=settings.llm_api_key,
+                base_url=settings.llm_base_url,
+                fast_model=settings.llm_fast_model,
+                smart_model=settings.llm_smart_model,
+            )
+            async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+                checkin_q = await asyncio.to_thread(
+                    llm_service.generate_checkin_question,
+                    lesson.title,
+                    lesson.content_markdown or lesson.description or "",
+                    course_topic,
+                )
             await message.answer(
-                f"Tốt lắm! Bạn vừa học xong *{lesson.title}* 🎉\n\n"
-                f"Kể mình nghe về bài này:\n"
-                f"• Bạn hiểu được những gì từ bài *{lesson.title}*?\n"
-                f"• Có phần nào còn chưa rõ không?\n\n"
-                f"_Trả lời càng chi tiết, quiz càng sát với những gì bạn vừa học._",
+                f"Tốt lắm! Bạn vừa học xong *{lesson.title}* 🎉\n\n{checkin_q}",
                 parse_mode="Markdown",
             )
         else:
-            await message.answer(
-                "Tốt lắm! 🎉\n\n"
-                "Hôm nay bạn học được gì?\n\n"
-                "Kể mình nghe:\n"
-                "• Hiểu được những khái niệm gì?\n"
-                "• Phần nào còn chưa rõ?"
-            )
+            await message.answer("Tốt lắm! 🎉\n\nHôm nay bạn học được gì? Kể mình nghe nhé!")
     except Exception as e:
         logger.error(f"Error in cmd_done for {telegram_id}: {e}", exc_info=True)
         await message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại!")
@@ -785,6 +792,19 @@ async def _handle_checkin(
         fast_model=settings.llm_fast_model,
         smart_model=settings.llm_smart_model,
     )
+
+    # Evaluate checkin trước — gửi nhận xét cho user
+    async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+        feedback = await asyncio.to_thread(
+            llm_service.evaluate_checkin,
+            text,
+            lesson.title,
+            lesson.content_markdown or lesson.description or "",
+            course_name,
+        )
+    if feedback:
+        await message.answer(feedback)
+
     quiz_service = QuizService(llm_service)
     async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
         result = await asyncio.to_thread(

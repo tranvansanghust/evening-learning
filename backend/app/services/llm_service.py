@@ -469,6 +469,51 @@ class LLMService:
             logger.error(f"Unexpected error generating summary: {str(e)}")
             raise
 
+    def generate_checkin_question(
+        self,
+        lesson_title: str,
+        lesson_content: str,
+        course_topic: str = ""
+    ) -> str:
+        """Generate a dynamic checkin question after /done, tailored to the lesson."""
+        prompt = LLMPrompts.checkin_question(lesson_title, lesson_content, course_topic)
+        try:
+            msg = self.client.chat.completions.create(
+                model=self.FAST_MODEL,
+                max_tokens=200,
+                messages=[
+                    {"role": "system", "content": "Bạn là giáo viên thân thiện. Chỉ trả về câu hỏi đúng yêu cầu."},
+                    {"role": "user", "content": prompt},
+                ]
+            )
+            return msg.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"generate_checkin_question failed: {e}")
+            return f"Bạn vừa học *{lesson_title}* — kể mình nghe bạn hiểu được gì và còn phần nào thắc mắc không?"
+
+    def evaluate_checkin(
+        self,
+        checkin_text: str,
+        lesson_title: str,
+        lesson_content: str,
+        course_topic: str = ""
+    ) -> str:
+        """Evaluate user's checkin description, return brief feedback string."""
+        prompt = LLMPrompts.checkin_evaluation(checkin_text, lesson_title, lesson_content, course_topic)
+        try:
+            msg = self.client.chat.completions.create(
+                model=self.FAST_MODEL,
+                max_tokens=200,
+                messages=[
+                    {"role": "system", "content": "Bạn là giáo viên thân thiện. Chỉ trả về nhận xét ngắn gọn."},
+                    {"role": "user", "content": prompt},
+                ]
+            )
+            return msg.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"evaluate_checkin failed: {e}")
+            return ""
+
     def suggest_next_courses(
         self,
         completed_course_name: str,
