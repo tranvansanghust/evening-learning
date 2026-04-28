@@ -1,0 +1,14 @@
+# Dev overrides — auto-loaded khi chạy docker-compose up
+# Không dùng file này trên production
+services:
+  api:
+    build: ./backend
+    volumes:
+      - ./backend:/app  # hot-reload source
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    ports:
+      - "8000:8000"  # expose trực tiếp cho dev
+
+  bot:
+    volumes:
+      - ./backend:/app
