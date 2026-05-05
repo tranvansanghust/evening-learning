@@ -1,311 +1,262 @@
-# Kế hoạch Deploy — Evening Learning
+# Deploy Evening Learning lên VPS
 
 ## Mục tiêu
+Deploy project `evening-learning` lên VPS theo cách khớp với codebase hiện tại, ưu tiên dùng **một stack Docker Compose duy nhất** gồm các service `mysql`, `api`, `bot`, `nginx` để có một production baseline chạy được sớm, dễ update, ít drift với repo.
 
-Deploy hệ thống lên VPS: FastAPI backend + Telegram bot (webhook) + MySQL + React frontend (static), accessible qua HTTPS với domain riêng.
+## Bối cảnh thực tế đã đọc từ code/docs
+- Repo **đã có sẵn hạ tầng deploy bằng Docker Compose**:
+  - `docker-compose.yml`
+  - `docker-compose.override.yml` (dev only)
+  - `backend/Dockerfile`
+  - `deploy/Dockerfile.nginx`
+  - `deploy/nginx.docker.conf`
+  - `deploy/update.sh`
+  - `Makefile`
+- `backend/entrypoint.sh` tự chạy `alembic upgrade head` trước khi start API/bot container.
+- `docker-compose.yml` hiện dựng 4 service:
+  - `mysql`
+  - `api`
+  - `bot` (đang chạy `python -m app.bot_polling`)
+  - `nginx`
+- `backend/app/main.py` **không có webhook endpoint**.
+- `TELEGRAM_WEBHOOK_SETUP.md` và plan deploy cũ đang giả định có `/webhook` hoặc `/webhook/telegram`, nhưng **code thực tế hiện giờ chưa expose route này**.
+- `docs/tech/codebase-health.md` xác nhận bot hiện tại chạy như **một service/process riêng bên trong stack Docker Compose** dùng polling, không đi qua FastAPI.
 
----
+## Kết luận thiết kế
+**Deploy production khả thi ngay bây giờ bằng polling mode**, không cần webhook trước.
 
-## Kiến trúc trên server
+Lý do:
+1. Phù hợp 100% với code hiện có.
+2. Tận dụng luôn Docker assets đã tồn tại trong repo.
+3. Tránh phải implement thêm webhook route chỉ để deploy.
+4. Có thể nâng cấp sang webhook sau như một task riêng nếu cần scale/clean architecture hơn.
 
-```
-Internet
-    │
-    ▼
-[Nginx] ← SSL termination (Let's Encrypt), port 80/443
-    ├── / → serve frontend static files (React build)
-    └── /api, /webhook, /health → proxy → uvicorn :8000
-    
-[systemd]
-    ├── evening-api.service   → uvicorn FastAPI (port 8000)
-    └── evening-bot.service   → Telegram bot (webhook mode, không polling)
-    
-[MySQL 8.0] → local, port 3306 (không expose ra ngoài)
-```
+## Các file cần thay đổi / tạo mới
+- `ai-proposals/deploy-plan.md` — **sửa** — cập nhật plan deploy để khớp codebase thật.
+- `backend/.env` — **tạo trên server, không commit** — cấu hình production secrets.
+- `docker-compose.prod.yml` — **có thể tạo mới** — nếu muốn tách production khỏi `docker-compose.override.yml` và tránh dev override hoàn toàn.
+- `deploy/nginx.ssl.conf` — **có thể tạo mới** — nếu muốn terminate HTTPS trực tiếp trong containerized nginx.
+- `deploy/update.sh` — **có thể sửa** — nếu cần đổi branch, thêm health-check, rollback step.
+- `/etc/nginx/sites-available/...` — **không cần** nếu giữ Nginx trong Docker.
+- `/etc/systemd/system/evening-api.service` — **không cần** cho phương án Docker-first.
+- `/etc/systemd/system/evening-bot.service` — **không cần** cho phương án Docker-first.
 
----
+## Kế hoạch thực hiện (từng bước)
 
-## Phase 1: Thuê server
+### Phase 0 — Chốt strategy deploy
+1. **Chọn polling-first production** thay vì webhook-first.
+2. Không implement webhook trong task này.
+3. Nếu sau này cần webhook, tách thành proposal riêng.
 
-### Lựa chọn đề xuất: DigitalOcean Droplet hoặc Vultr
+### Phase 1 — Audit deploy assets hiện có
+1. Đọc lại các file deploy thật:
+   - `docker-compose.yml`
+   - `docker-compose.override.yml`
+   - `backend/Dockerfile`
+   - `backend/entrypoint.sh`
+   - `deploy/Dockerfile.nginx`
+   - `deploy/nginx.docker.conf`
+   - `deploy/update.sh`
+   - `Makefile`
+2. Xác nhận các assumptions:
+   - API chạy ở port 8000 trong network nội bộ Docker.
+   - Bot polling là service riêng **trong cùng stack Docker Compose**, không phải một cách deploy tách rời khỏi compose.
+   - MySQL dùng volume `mysql_data`.
+   - Frontend được build vào image nginx.
+3. Ghi lại các mismatch giữa docs và code:
+   - docs cũ nói webhook route tồn tại, nhưng code chưa có.
+   - docs cũ nói systemd/nginx host-level là đường chính, nhưng repo hiện nghiêng về Docker deploy.
 
-| Tier | RAM | vCPU | Storage | Giá/tháng | Ghi chú |
-|------|-----|------|---------|-----------|---------|
-| Tối thiểu | 1 GB | 1 | 25 GB SSD | ~$6 | Đủ cho dev/test |
-| **Đề xuất** | **2 GB** | **1** | **50 GB SSD** | **~$12** | Production ổn định |
-| Thoải mái | 4 GB | 2 | 80 GB SSD | ~$24 | Nếu có nhiều users |
+### Phase 2 — Chuẩn bị VPS
+1. Tạo VPS Ubuntu 22.04 hoặc 24.04, tối thiểu 2GB RAM.
+2. Cấu hình user deploy không dùng root.
+3. Bật firewall:
+   - 22/tcp
+   - 80/tcp
+   - 443/tcp
+4. Cài packages tối thiểu:
+   - git
+   - docker engine
+   - docker compose plugin
+   - certbot (nếu dùng SSL ngoài container)
+5. Clone repo vào `/opt/evening-learning`.
 
-**Đề xuất: Vultr hoặc DigitalOcean, 2GB RAM, Ubuntu 22.04 LTS**
+### Phase 3 — Chuẩn bị cấu hình production
+1. Tạo `backend/.env` thật trên server từ `backend/.env.example`.
+2. Điền đầy đủ:
+   - `DB_HOST=mysql`
+   - `DB_PORT=3306`
+   - `DB_USER`
+   - `DB_PASSWORD`
+   - `DB_NAME`
+   - `MYSQL_ROOT_PASSWORD`
+   - `TELEGRAM_BOT_TOKEN`
+   - `LLM_BASE_URL`
+   - `LLM_API_KEY`
+   - `LLM_FAST_MODEL`
+   - `LLM_SMART_MODEL`
+   - `FRONTEND_URL=https://<domain>`
+   - `VITE_API_BASE_URL=https://<domain>`
+3. Set permission an toàn:
+   - `chmod 600 backend/.env`
+4. Xác nhận `docker-compose.yml` không vô tình nạp `docker-compose.override.yml` trong production workflow.
+   - Nếu cần, tạo `docker-compose.prod.yml` và dùng explicit file list.
 
-Lý do: Python + MySQL + Nginx chiếm ~600MB RAM khi idle; 2GB đủ headroom.
+### Phase 4 — Build và bring up production stack
+1. Chạy:
+   ```bash
+   docker compose --env-file backend/.env build
+   docker compose --env-file backend/.env up -d
+   ```
+2. Xác nhận container chạy:
+   ```bash
+   docker compose ps
+   ```
+3. Xem logs:
+   ```bash
+   docker compose logs -f mysql api bot nginx
+   ```
+4. Kiểm tra migration đã chạy qua `entrypoint.sh`.
+5. Test nội bộ:
+   ```bash
+   curl http://localhost/health
+   ```
 
-**Cần thêm: Domain name** (~$10-15/năm, Namecheap hoặc GoDaddy)
+### Phase 5 — Expose domain + HTTPS
+Có 2 phương án. Chỉ chọn **1**.
 
----
+#### Phương án A — nhanh và ít sửa repo: Nginx/Caddy ngoài Docker làm reverse proxy
+1. Để Docker nginx chỉ serve nội bộ hoặc bỏ hẳn nginx container.
+2. Dùng host-level reverse proxy nhận 80/443.
+3. Proxy vào container `api`/frontend tương ứng.
+4. Dùng Certbot hoặc Caddy auto TLS.
 
-## Phase 2: Chuẩn bị server (một lần)
+#### Phương án B — giữ sát repo hiện tại: Nginx trong Docker + SSL ngoài hoặc chỉnh thêm SSL vào container
+1. Dùng `nginx` service như compose hiện tại.
+2. Nếu terminate SSL ngoài Docker, proxy 443 → `localhost:80`.
+3. Nếu terminate SSL trong Docker, tạo thêm config/cert mount riêng.
 
-### 2.1 Cấu hình ban đầu
-```bash
-# SSH vào server với root
-ssh root@<server-ip>
+**Khuyến nghị:** bắt đầu với **Phương án A** nếu VPS là single-host truyền thống; dễ quản lý SSL hơn.
 
-# Tạo user deploy (không dùng root)
-adduser deploy
-usermod -aG sudo deploy
+### Phase 6 — Verify production behavior
+1. Health check:
+   ```bash
+   curl https://<domain>/health
+   ```
+2. Verify frontend load được từ domain.
+3. Verify API route chính:
+   - `/health`
+   - `/docs`
+   - một route `/api/...` không phá app
+4. Verify Telegram bot polling:
+   - gửi `/start` cho bot
+   - xem logs `docker compose logs -f bot`
+5. Verify DB persist sau restart:
+   ```bash
+   docker compose restart
+   docker compose ps
+   ```
+6. Verify migration vẫn an toàn khi restart `api`.
 
-# Copy SSH key
-mkdir -p /home/deploy/.ssh
-cp ~/.ssh/authorized_keys /home/deploy/.ssh/
-chown -R deploy:deploy /home/deploy/.ssh
+### Phase 7 — Vận hành và update
+1. Dùng `deploy/update.sh` làm base, nhưng sửa cho khớp branch thực tế nếu cần.
+2. Nên thêm các bước sau vào script update:
+   - `git fetch --all`
+   - checkout branch/commit rõ ràng
+   - `docker compose build`
+   - `docker compose up -d`
+   - smoke test `/health`
+3. Thiết lập backup:
+   - MySQL dump định kỳ hoặc snapshot volume
+4. Thiết lập monitoring/log rotation tối thiểu.
 
-# Cấu hình firewall
-ufw allow OpenSSH
-ufw allow 80
-ufw allow 443
-ufw enable
-```
+## Trình tự implement đề xuất (bite-sized)
 
-### 2.2 Cài đặt packages
-```bash
-# Python 3.11
-sudo apt update && sudo apt install -y python3.11 python3.11-venv python3-pip
+### Task 1: Chuẩn hóa tài liệu deploy theo trạng thái code thật
+**Mục tiêu:** sửa tài liệu/plan để không còn nói webhook-first như thể route đã tồn tại.
 
-# MySQL 8.0
-sudo apt install -y mysql-server
-sudo mysql_secure_installation
+**Files:**
+- Modify: `ai-proposals/deploy-plan.md`
+- Read: `docs/tech/codebase-health.md`
+- Read: `docker-compose.yml`
+- Read: `TELEGRAM_WEBHOOK_SETUP.md`
 
-# Nginx
-sudo apt install -y nginx
+**Expected outcome:** Plan phản ánh polling-first deploy.
 
-# Certbot (Let's Encrypt)
-sudo apt install -y certbot python3-certbot-nginx
+### Task 2: Tách rõ production compose path
+**Mục tiêu:** tránh production vô tình dùng `docker-compose.override.yml` của dev.
 
-# Git
-sudo apt install -y git
-```
+**Files:**
+- Create or Modify: `docker-compose.prod.yml`
+- Optional Modify: `Makefile`
+- Optional Modify: `deploy/update.sh`
 
-### 2.3 Setup MySQL
-```bash
-sudo mysql -u root -p < docs/setup.sql
-# hoặc chạy thủ công:
-# CREATE DATABASE evening_learning CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-# CREATE USER 'evening_user'@'localhost' IDENTIFIED BY '<mật khẩu>';
-# GRANT ALL ON evening_learning.* TO 'evening_user'@'localhost';
-```
+**Expected outcome:** Có lệnh rõ ràng cho production, không bị hot-reload bind mount.
 
----
+### Task 3: Viết runbook cấu hình `.env` production
+**Mục tiêu:** chốt chính xác các biến bắt buộc để bring up được stack.
 
-## Phase 3: Deploy ứng dụng
+**Files:**
+- Modify: `backend/.env.example`
+- Optional Create: `docs/tech/deployment-runbook.md`
 
-### 3.1 Clone repo và setup backend
-```bash
-sudo mkdir -p /opt/evening-learning
-sudo chown deploy:deploy /opt/evening-learning
-cd /opt/evening-learning
+**Expected outcome:** Không phải đoán env vars khi deploy thật.
 
-git clone <repo-url> .
+### Task 4: Chọn và cố định chiến lược TLS/proxy
+**Mục tiêu:** thống nhất 1 cách terminate HTTPS.
 
-cd backend
-python3.11 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+**Files:**
+- Optional Create: `deploy/nginx.ssl.conf`
+- Optional Create: `docs/tech/deployment-runbook.md`
 
-# Tạo .env từ .env.example
-cp .env.example .env
-nano .env  # điền đầy đủ: DB credentials, Telegram token, LLM API key, webhook URL
-```
+**Expected outcome:** biết chính xác SSL nằm ở đâu, ai giữ cert, cách renew.
 
-### 3.2 Chạy migrations
-```bash
-cd /opt/evening-learning/backend
-source venv/bin/activate
-alembic upgrade head
-```
+### Task 5: Deploy thử lên VPS và verify end-to-end
+**Mục tiêu:** stack thật chạy được với domain, DB, bot polling.
 
-### 3.3 Build frontend
-```bash
-cd /opt/evening-learning/frontend
-npm install
-VITE_API_BASE_URL=https://<domain>/api npm run build
-# Output: frontend/dist/
-```
+**Files:**
+- No repo code changes required necessarily
+- Server-side only configuration
 
----
+**Verification:**
+- `docker compose ps`
+- `curl https://<domain>/health`
+- nhắn `/start` cho bot và xem bot phản hồi
 
-## Phase 4: Process management (systemd)
-
-### 4.1 Service file cho FastAPI
-Tạo `/etc/systemd/system/evening-api.service`:
-```ini
-[Unit]
-Description=Evening Learning API
-After=network.target mysql.service
-
-[Service]
-User=deploy
-WorkingDirectory=/opt/evening-learning/backend
-Environment="PATH=/opt/evening-learning/backend/venv/bin"
-ExecStart=/opt/evening-learning/backend/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### 4.2 Service file cho Telegram Bot
-Tạo `/etc/systemd/system/evening-bot.service`:
-```ini
-[Unit]
-Description=Evening Learning Telegram Bot
-After=evening-api.service
-
-[Service]
-User=deploy
-WorkingDirectory=/opt/evening-learning/backend
-Environment="PATH=/opt/evening-learning/backend/venv/bin"
-ExecStart=/opt/evening-learning/backend/venv/bin/python -m app.bot_polling
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-> **Lưu ý**: Trong production nên dùng webhook thay polling. Cần set `TELEGRAM_WEBHOOK_URL=https://<domain>/webhook` trong .env và đăng ký webhook với Telegram API.
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable evening-api evening-bot
-sudo systemctl start evening-api evening-bot
-```
-
----
-
-## Phase 5: Nginx + SSL
-
-### 5.1 Nginx config
-Tạo `/etc/nginx/sites-available/evening-learning`:
-```nginx
-server {
-    listen 80;
-    server_name <domain>;
-
-    # Frontend static files
-    root /opt/evening-learning/frontend/dist;
-    index index.html;
-
-    # API reverse proxy
-    location ~ ^/(api|webhook|health) {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-
-    # React SPA fallback
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-}
-```
-
-```bash
-sudo ln -s /etc/nginx/sites-available/evening-learning /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
-### 5.2 SSL với Let's Encrypt
-```bash
-# Trỏ DNS domain về server IP trước
-sudo certbot --nginx -d <domain>
-# Certbot tự động sửa nginx config và setup auto-renewal
-```
-
----
-
-## Phase 6: Đăng ký Telegram Webhook
-
-Sau khi có HTTPS:
-```bash
-curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<domain>/webhook"
-```
-
-Cập nhật `.env`: `TELEGRAM_WEBHOOK_URL=https://<domain>/webhook`
-
-Lúc này có thể tắt `evening-bot.service` nếu dùng webhook thuần (FastAPI nhận webhook trực tiếp).
-
----
-
-## Phase 7: Kiểm tra
-
-```bash
-# Health check
-curl https://<domain>/health
-
-# Nginx logs
-sudo tail -f /var/log/nginx/access.log
-
-# App logs
-sudo journalctl -u evening-api -f
-sudo journalctl -u evening-bot -f
-
-# MySQL
-sudo systemctl status mysql
-```
-
----
-
-## Quy trình update code (sau lần đầu)
-
+## Lệnh deploy production đề xuất (phiên bản ngắn)
 ```bash
 cd /opt/evening-learning
-git pull origin master
+cp backend/.env.example backend/.env
+nano backend/.env
+chmod 600 backend/.env
 
-# Nếu có thay đổi backend
-cd backend
-source venv/bin/activate
-pip install -r requirements.txt  # nếu deps thay đổi
-alembic upgrade head              # nếu có migration mới
-sudo systemctl restart evening-api evening-bot
-
-# Nếu có thay đổi frontend
-cd ../frontend
-npm install
-VITE_API_BASE_URL=https://<domain>/api npm run build
-# Nginx tự phục vụ file mới từ dist/
+docker compose --env-file backend/.env build
+docker compose --env-file backend/.env up -d
+docker compose --env-file backend/.env ps
+curl http://localhost/health
 ```
 
----
+## Rủi ro / mismatch cần lưu ý
+1. **Webhook docs không khớp code thật**
+   - Hiện chưa có route `/webhook` hoặc `/webhook/telegram` trong FastAPI app.
+   - Không nên set Telegram webhook cho tới khi code webhook thật sự tồn tại.
 
-## Các file cần tạo/sửa khi implement
+2. **`docker-compose.override.yml` là dev-only**
+   - Nếu production dùng `docker compose up` mặc định ngay trong repo, cần chắc chắn file override không bị áp dụng ngoài ý muốn.
 
-- `/etc/systemd/system/evening-api.service` — tạo mới trên server
-- `/etc/systemd/system/evening-bot.service` — tạo mới trên server
-- `/etc/nginx/sites-available/evening-learning` — tạo mới trên server
-- `backend/.env` — điền credentials thật trên server
-- (Optional) `deploy.sh` — script tự động hóa update code
+3. **Polling trong production**
+   - Hoàn toàn chạy được cho quy mô nhỏ/đầu tiên.
+   - Nhưng bot sẽ là process stateful riêng; cần log/monitor/restart policy ổn.
 
----
+4. **Migrations chạy trên entrypoint**
+   - Thuận tiện, nhưng cần cẩn thận khi scale nhiều replica `api` cùng lúc về sau.
 
-## Chi phí ước tính/tháng
+5. **Secret management**
+   - `.env` chứa DB password, bot token, LLM key.
+   - Không commit, không log, không copy vào docs công khai.
 
-| Hạng mục | Chi phí |
-|----------|---------|
-| VPS 2GB (Vultr/DO) | ~$12 |
-| Domain (.com/năm) | ~$1.2/tháng |
-| LLM API (OpenAI) | tùy usage |
-| **Tổng fixed** | **~$13-14/tháng** |
-
----
-
-## Rủi ro & lưu ý
-
-- **Secret management**: `.env` chứa tokens, không commit lên git. Dùng `chmod 600 .env`.
-- **Bot webhook vs polling**: Webhook cần HTTPS (đã có). Polling đơn giản hơn nhưng không scale.
-- **MySQL backup**: Cần setup cronjob `mysqldump` hàng ngày.
-- **CORS**: Cập nhật `config.py` allowed origins khi đã có domain thật.
-- **APScheduler**: Đang chạy trong process của bot — nếu bot restart thì scheduler reset.
+## Đề xuất cuối cùng
+**Nên deploy bản đầu tiên bằng một stack Docker Compose duy nhất, trong đó `bot` là service polling riêng cùng với `mysql`, `api`, `nginx`**, không ép webhook ở vòng này. Sau khi production baseline ổn và app chạy thật, nếu muốn tối ưu Telegram delivery thì tạo proposal riêng cho:
+- webhook endpoint trong FastAPI
+- webhook registration flow
+- bỏ polling service nếu phù hợp
