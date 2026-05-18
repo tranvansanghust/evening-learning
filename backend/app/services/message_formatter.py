@@ -1,5 +1,6 @@
 """Format helpers for Telegram messages."""
 
+import html
 from typing import List
 
 
@@ -33,27 +34,27 @@ def format_quiz_detail(
     concepts_mastered: list,
     concepts_weak: list,
 ) -> str:
-    lines = [f"📝 <b>Kết quả quiz: {lesson_name}</b>\n"]
+    lines = [f"📝 <b>Kết quả quiz: {html.escape(str(lesson_name))}</b>\n"]
 
     if concepts_mastered:
         lines.append("✅ <b>Nắm chắc:</b>")
         for c in concepts_mastered:
-            lines.append(f"  • {c}")
+            lines.append(f"  • {html.escape(str(c))}")
         lines.append("")
 
     if concepts_weak:
         lines.append("⚠️ <b>Cần ôn lại:</b>")
         for w in concepts_weak:
             if isinstance(w, dict):
-                concept = w.get("concept", "")
-                explanation = w.get("correct_explanation", "")
+                concept = html.escape(str(w.get("concept", "")))
+                explanation = str(w.get("correct_explanation", ""))
                 lines.append(f"  • <b>{concept}</b>")
                 if explanation:
                     if len(explanation) > 150:
                         explanation = explanation[:147] + "..."
-                    lines.append(f"    <i>{explanation}</i>")
+                    lines.append(f"    <i>{html.escape(explanation)}</i>")
             else:
-                lines.append(f"  • {w}")
+                lines.append(f"  • {html.escape(str(w))}")
         lines.append("")
 
     if not concepts_mastered and not concepts_weak:

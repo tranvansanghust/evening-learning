@@ -856,9 +856,10 @@ async def handle_quiz_callback(callback: CallbackQuery) -> None:
                 )
             )
 
+        import html as _html
         is_correct = result.get("is_correct", False)
         correct_answer = result.get("correct_answer", "")
-        feedback = "✅ Đúng rồi!" if is_correct else f"❌ Chưa đúng. Đáp án đúng là: <b>{correct_answer}</b>"
+        feedback = "✅ Đúng rồi!" if is_correct else f"❌ Chưa đúng. Đáp án đúng là: <b>{_html.escape(str(correct_answer))}</b>"
         await callback.message.answer(feedback, parse_mode="HTML")
 
         next_action = result.get("next_action", "continue")
@@ -885,7 +886,7 @@ async def handle_quiz_callback(callback: CallbackQuery) -> None:
             except Exception:
                 summary = result.get("summary", "")
                 msg = (
-                    f"Quiz hoàn thành! ✅\n\n{summary}\n\nGõ /today để xem bài tiếp theo 📚"
+                    f"Quiz hoàn thành! ✅\n\n{_html.escape(summary)}\n\nGõ /today để xem bài tiếp theo 📚"
                     if summary else "Quiz hoàn thành! ✅\n\nGõ /today để xem bài tiếp theo 📚"
                 )
             await callback.message.answer(msg, parse_mode="HTML")

@@ -55,7 +55,7 @@ export default function LessonPage() {
         <MarkdownRenderer content={lesson.content_markdown} />
       </main>
       <footer className="lesson-footer">
-        <p>Học trên Telegram bot để làm quiz bài này</p>
+        <p>Quay lại chat box click vào /done hoặc gõ /done để làm bài quiz</p>
       </footer>
     </div>
   );
