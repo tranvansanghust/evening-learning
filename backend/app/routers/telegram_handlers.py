@@ -282,39 +282,48 @@ async def cmd_done(message: Message) -> None:
             await message.answer("Bạn chưa có khoá học. Gõ /start để chọn khoá học!")
             return
 
-        # Set checkin_pending thay vì hack OnboardingState
-        user.checkin_pending = True
-
         # Update last_activity_at
         enrollment.last_activity_at = datetime.utcnow()
         db.commit()
 
-        # Load current lesson để personalise message
         lesson = get_current_lesson(user.user_id, enrollment.course_id, db)
-        if lesson:
-            from app.config import settings
-            from app.models import Course
-            course = db.query(Course).filter(Course.course_id == enrollment.course_id).first()
-            course_topic = course.name if course else ""
-            llm_service = LLMService(
-                api_key=settings.llm_api_key,
-                base_url=settings.llm_base_url,
-                fast_model=settings.llm_fast_model,
-                smart_model=settings.llm_smart_model,
-            )
+        if not lesson:
+            await message.answer("Bạn đã hoàn thành tất cả bài học rồi! 🎉 Gõ /today để xem tổng kết.")
+            return
+
+        from app.models import Course, Lesson as LessonModel
+        course = db.query(Course).filter(Course.course_id == enrollment.course_id).first()
+        course_name = course.name if course else ""
+
+        llm_service = _make_llm_service()
+
+        if not lesson.content_markdown or lesson.content_markdown.startswith("```"):
+            from app.services.llm_content_generator import LLMContentGenerator
+            total_lessons = db.query(LessonModel).filter(LessonModel.course_id == enrollment.course_id).count()
+            generator = LLMContentGenerator(client=llm_service.client, smart_model=settings.llm_smart_model)
             async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
-                checkin_q = await asyncio.to_thread(
-                    llm_service.generate_checkin_question,
-                    lesson.title,
-                    lesson.content_markdown or lesson.description or "",
-                    course_topic,
+                await asyncio.to_thread(
+                    lambda: generator.get_or_generate(lesson=lesson, course_topic=course_name, total_lessons=total_lessons, db=db)
                 )
-            await message.answer(
-                f"Tốt lắm! Bạn vừa học xong *{lesson.title}* 🎉\n\n{checkin_q}",
-                parse_mode="Markdown",
+
+        quiz_service = QuizService(llm_service, _question_store)
+        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
+            result = await asyncio.to_thread(
+                lambda: quiz_service.start_quiz(
+                    user_id=user.user_id,
+                    lesson_id=lesson.lesson_id,
+                    user_checkin=None,
+                    db_session=db,
+                )
             )
-        else:
-            await message.answer("Tốt lắm! 🎉\n\nHôm nay bạn học được gì? Kể mình nghe nhé!")
+
+        keyboard = _make_quiz_keyboard(result["session_id"], result["question_id"], result["list_answer"])
+        quiz_msg = _format_quiz_message(result["question"], result["list_answer"])
+        await message.answer(
+            f"Tốt lắm! Bắt đầu quiz <b>{lesson.title}</b> thôi 📝\n\n{quiz_msg}",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
     except Exception as e:
         logger.error(f"Error in cmd_done for {telegram_id}: {e}", exc_info=True)
         await message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại!")
@@ -609,12 +618,7 @@ async def handle_text(message: Message) -> None:
             await _handle_onboarding_step(message, text, user_id, ob_state, onboarding_service)
             return
 
-        # Ưu tiên 2: user đang chờ nhập mô tả bài học (checkin_pending)
-        if user and user.checkin_pending:
-            await _handle_checkin(message, text, user, db)
-            return
-
-        # Ưu tiên 3: đang trong quiz — user phải dùng inline button, không nhập text
+        # Ưu tiên 2: đang trong quiz — user phải dùng inline button, không nhập text
         active_session = db.query(QuizSession).filter(
             QuizSession.user_id == user_id,
             QuizSession.status == "active",
@@ -751,17 +755,6 @@ async def _handle_onboarding_step(
         await message.answer("Gõ /help để xem các lệnh có sẵn.")
 
 
-def _is_off_topic(checkin: str, course_name: str, lesson_title: str) -> bool:
-    """True nếu checkin không có từ nào liên quan đến course/lesson."""
-    checkin_lower = checkin.lower()
-    # Lấy các từ có nghĩa (>= 3 ký tự) từ course_name và lesson_title
-    topic_words = {
-        w.lower() for w in (course_name + " " + lesson_title).split()
-        if len(w) >= 3
-    }
-    return len(topic_words) > 0 and not any(w in checkin_lower for w in topic_words)
-
-
 def _parse_deadline(text: str):
     """Parse deadline từ text: '3 months', '1 month', hoặc 'YYYY-MM-DD'."""
     from datetime import date, timedelta
@@ -788,91 +781,6 @@ def _parse_deadline(text: str):
 
     # Default: 3 months
     return date.today() + timedelta(days=90)
-
-
-async def _handle_checkin(
-    message: Message,
-    text: str,
-    user,
-    db,
-) -> None:
-    """User vừa mô tả hôm nay học được gì → start quiz."""
-    from app.models import UserCourse, Lesson
-    from app.config import settings
-
-    user_id = user.user_id
-
-    enrollment = (
-        db.query(UserCourse)
-        .filter(UserCourse.user_id == user_id, UserCourse.status == "IN_PROGRESS")
-        .first()
-    )
-    if not enrollment:
-        await message.answer("Bạn chưa có khoá học. Gõ /start để bắt đầu!")
-        return
-
-    lesson = get_current_lesson(user_id, enrollment.course_id, db)
-    if not lesson:
-        await message.answer("Bạn đã hoàn thành tất cả bài học rồi! Gõ /today để xem tổng kết.")
-        return
-
-    # Nhắc nhẹ nếu checkin lạc đề
-    from app.models import Course
-    course = db.query(Course).filter(Course.course_id == enrollment.course_id).first()
-    course_name = course.name if course else ""
-    if _is_off_topic(text, course_name, lesson.title):
-        await message.answer(
-            f"_Bài hôm nay là *{lesson.title}* ({course_name}) — mình sẽ quiz bạn về nội dung đó nhé 😄_",
-            parse_mode="Markdown",
-        )
-
-    # Xoá checkin_pending trước khi start quiz
-    user.checkin_pending = False
-    db.commit()
-
-    llm_service = _make_llm_service()
-
-    # Ensure content_markdown exists trước khi quiz (generate nếu chưa có)
-    if not lesson.content_markdown or lesson.content_markdown.startswith("```"):
-        from app.services.llm_content_generator import LLMContentGenerator
-        from app.models import Lesson as LessonModel
-        total_lessons = db.query(LessonModel).filter(LessonModel.course_id == enrollment.course_id).count()
-        generator = LLMContentGenerator(client=llm_service.client, smart_model=settings.llm_smart_model)
-        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
-            await asyncio.to_thread(
-                lambda: generator.get_or_generate(lesson=lesson, course_topic=course_name, total_lessons=total_lessons, db=db)
-            )
-
-    # Evaluate checkin trước — gửi nhận xét cho user
-    async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
-        feedback = await asyncio.to_thread(
-            llm_service.evaluate_checkin,
-            text,
-            lesson.title,
-            lesson.content_markdown or lesson.description or "",
-            course_name,
-        )
-    if feedback:
-        await message.answer(feedback)
-
-    quiz_service = QuizService(llm_service, _question_store)
-    async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
-        result = await asyncio.to_thread(
-            lambda: quiz_service.start_quiz(
-                user_id=user_id,
-                lesson_id=lesson.lesson_id,
-                user_checkin=text,
-                db_session=db,
-            )
-        )
-
-    keyboard = _make_quiz_keyboard(result["session_id"], result["question_id"], result["list_answer"])
-    quiz_msg = _format_quiz_message(result["question"], result["list_answer"])
-    await message.answer(
-        f"Quiz <b>{lesson.title}</b> bắt đầu! 📝\n\n{quiz_msg}",
-        parse_mode="HTML",
-        reply_markup=keyboard,
-    )
 
 
 @router.callback_query(F.data.startswith("quiz:"))
