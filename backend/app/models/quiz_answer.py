@@ -5,7 +5,7 @@ Represents individual answers submitted during a quiz session.
 """
 
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Boolean, Text, DateTime, ForeignKey, Index
+from sqlalchemy import Column, Integer, String, Boolean, Text, DateTime, ForeignKey, Index, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -49,6 +49,9 @@ class QuizAnswer(Base):
     user_answer = Column(Text, nullable=False)
     is_correct = Column(Boolean, nullable=False, default=False)
     engagement_level = Column(String(20), nullable=True)  # 'low', 'medium', 'high'
+    question_id = Column(String(36), nullable=True)        # UUID of the MCQ question in Redis
+    correct_answer = Column(Text, nullable=True)           # text of the correct choice
+    choices = Column(JSON, nullable=True)                  # list[str] of all choices shown
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Relationships

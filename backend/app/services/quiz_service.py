@@ -1,15 +1,8 @@
 """
-Quiz Service for managing the quiz lifecycle.
+Quiz Service for managing the MCQ quiz lifecycle.
 
-This service orchestrates the entire quiz flow using the LLM Service.
-Handles session creation, answer evaluation, progression logic, and summary generation.
-
-Responsibilities:
-    - Create and manage quiz sessions
-    - Evaluate user answers with LLM
-    - Decide quiz progression (continue, follow-up, end)
-    - Generate post-quiz summaries
-    - Track quiz status and conversation history
+Orchestrates session creation, MCQ generation, deterministic answer evaluation
+(via Redis-stored correct answers), and summary generation.
 """
 
 import logging
@@ -19,83 +12,56 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.models import QuizSession, QuizAnswer, QuizSummary, Lesson, Concept, User, Course
-from app.services.llm_service import LLMService, AnswerEvaluation, ActionType, NextAction
+from app.services.llm_service import LLMService
+from app.services.question_store import QuestionStoreBase, MCQData
 
 logger = logging.getLogger(__name__)
 
 
 def _next_review_interval_days(review_count: int) -> int:
-    """Return the number of days until next spaced repetition review.
-
-    Intervals: 0 reviews -> 3 days, 1 -> 7, 2 -> 14, 3+ -> 30.
-    """
-    intervals = {0: 3, 1: 7, 2: 14}
-    return intervals.get(review_count, 30)
+    """Spaced repetition intervals: 0→3d, 1→7d, 2→14d, 3+→30d."""
+    return {0: 3, 1: 7, 2: 14}.get(review_count, 30)
 
 
 class QuizService:
-    """
-    Service for managing quiz sessions and orchestrating the quiz flow.
+    """Manages MCQ quiz sessions using Redis for pending question storage."""
 
-    Coordinates between the database layer and LLM Service to create a seamless
-    quiz experience. Handles the conversation history, determines when to ask questions,
-    and tracks mastery of concepts.
-
-    Attributes:
-        llm_service (LLMService): Instance of LLMService for AI interactions
-    """
-
-    def __init__(self, llm_service: LLMService):
-        """
-        Initialize QuizService with an LLM Service instance.
-
-        Args:
-            llm_service: Configured instance of LLMService
-        """
+    def __init__(self, llm_service: LLMService, question_store: QuestionStoreBase) -> None:
         self.llm_service = llm_service
+        self.question_store = question_store
         logger.info("QuizService initialized")
+
+    def _load_lesson_context(self, lesson, course, user_checkin: Optional[str] = None) -> tuple[str, str, List[str]]:
+        """Return (lesson_content, course_topic, concept_names)."""
+        course_topic = course.name if course else lesson.title
+        lesson_content = lesson.content_markdown or lesson.description or f"Bài học về {course_topic}: {lesson.title}"
+        if user_checkin:
+            lesson_content = f"{lesson_content}\n\nHọc viên mô tả nội dung học hôm nay: {user_checkin}".strip()
+        return lesson_content, course_topic
+
+    def _load_concepts(self, lesson_id: int, lesson_title: str, db_session: Session) -> tuple[List[Any], List[str]]:
+        concepts = db_session.query(Concept).filter(Concept.lesson_id == lesson_id).all()
+        names = [c.name for c in concepts] if concepts else [lesson_title]
+        return concepts, names
+
+    def _save_mcq_to_store(self, mcq) -> None:
+        self.question_store.save(
+            mcq.question_id,
+            MCQData(question=mcq.question, list_answer=mcq.list_answer, correct_answer=mcq.correct_answer),
+        )
 
     def start_quiz(
         self,
         user_id: int,
         lesson_id: int,
         user_checkin: Optional[str],
-        db_session: Session
+        db_session: Session,
     ) -> Dict[str, Any]:
-        """
-        Initialize a quiz session and generate the first question.
+        """Create a quiz session, generate the first MCQ, store it in Redis.
 
-        Creates a new QuizSession record, loads lesson content and concepts,
-        and uses the LLM to generate the first question based on the lesson.
-
-        Args:
-            user_id: ID of the user starting the quiz
-            lesson_id: ID of the lesson being quizzed on
-            user_checkin: Optional user check-in message (Track A external learning)
-            db_session: SQLAlchemy database session
-
-        Returns:
-            dict with keys:
-                - session_id: The created quiz session ID
-                - first_question: The generated first question
-                - lesson_name: Name of the lesson
-                - concepts: List of concept names in the lesson
-
-        Raises:
-            ValueError: If user or lesson not found
-            Exception: On LLM service errors
-
-        Example:
-            >>> result = quiz_service.start_quiz(
-            ...     user_id=1,
-            ...     lesson_id=5,
-            ...     user_checkin="I learned about useState",
-            ...     db_session=db
-            ... )
-            >>> print(result["first_question"])
+        Returns: session_id, question_id, question, list_answer, lesson_name, concepts
         """
         try:
-            # Load user and lesson
             user = db_session.query(User).filter(User.user_id == user_id).first()
             if not user:
                 raise ValueError(f"User {user_id} not found")
@@ -104,258 +70,120 @@ class QuizService:
             if not lesson:
                 raise ValueError(f"Lesson {lesson_id} not found")
 
-            # Load course to get topic anchor
             course = db_session.query(Course).filter(Course.course_id == lesson.course_id).first()
-            course_topic = course.name if course else lesson.title
+            lesson_content, course_topic = self._load_lesson_context(lesson, course, user_checkin)
+            _, concept_names = self._load_concepts(lesson_id, lesson.title, db_session)
 
-            # Load concepts for this lesson
-            concepts = db_session.query(Concept).filter(
-                Concept.lesson_id == lesson_id
-            ).all()
-
-            if not concepts:
-                logger.warning(f"Lesson {lesson_id} has no concepts, falling back to lesson title")
-                concept_names = [lesson.title]
-            else:
-                concept_names = [c.name for c in concepts]
-
-            # Create QuizSession record
-            quiz_session = QuizSession(
-                user_id=user_id,
-                lesson_id=lesson_id,
-                status="active",
-                messages=[]
-            )
+            quiz_session = QuizSession(user_id=user_id, lesson_id=lesson_id, status="active", messages=[])
             db_session.add(quiz_session)
-            db_session.flush()  # Get the session_id without committing
-
+            db_session.flush()
             session_id = quiz_session.session_id
             logger.info(f"Created quiz session {session_id} for user {user_id}, lesson {lesson_id}")
 
-            # Build lesson context — prefer content_markdown (task 14), fallback to description
-            lesson_content = lesson.content_markdown or lesson.description or f"Bài học về {course_topic}: {lesson.title}"
-            if user_checkin:
-                # user_checkin is supplementary context only — does NOT override concept_names
-                lesson_content = f"{lesson_content}\n\nHọc viên mô tả nội dung học hôm nay: {user_checkin}".strip()
-
-            # Build conversation history (empty for first question)
-            conversation_history = []
-
-            # Generate first question
             try:
-                first_question = self.llm_service.generate_quiz_question(
+                mcq = self.llm_service.generate_mcq_question(
                     lesson_content=lesson_content,
-                    conversation_history=conversation_history,
                     concepts=concept_names,
-                    is_first_question=True,
-                    course_topic=course_topic
+                    conversation_history=[],
+                    course_topic=course_topic,
                 )
             except Exception as e:
-                logger.error(f"Failed to generate first question for session {session_id}: {str(e)}")
+                logger.error(f"Failed to generate first MCQ for session {session_id}: {e}")
                 db_session.rollback()
                 raise
 
-            # Save first question (and checkin as metadata) to conversation history
-            messages = [{"role": "assistant", "content": first_question}]
+            self._save_mcq_to_store(mcq)
+
+            messages = [{"role": "assistant", "content": mcq.question}]
             if user_checkin:
-                # Store checkin as metadata for submit_answer to use later
                 messages.insert(0, {"role": "_checkin", "content": user_checkin})
             quiz_session.messages = messages
             db_session.commit()
 
-            logger.info(f"Quiz session {session_id} started with first question")
-
+            logger.info(f"Quiz session {session_id} started, question_id={mcq.question_id}")
             return {
                 "session_id": session_id,
-                "first_question": first_question,
+                "question_id": mcq.question_id,
+                "question": mcq.question,
+                "list_answer": mcq.list_answer,
                 "lesson_name": lesson.title,
                 "concepts": concept_names,
-                "user_checkin": user_checkin
             }
 
         except ValueError as e:
-            logger.error(f"Validation error in start_quiz: {str(e)}")
+            logger.error(f"Validation error in start_quiz: {e}")
             raise
         except Exception as e:
-            logger.error(f"Unexpected error in start_quiz: {str(e)}")
+            logger.error(f"Unexpected error in start_quiz: {e}")
             db_session.rollback()
             raise
 
     def submit_answer(
         self,
         session_id: int,
-        user_answer: str,
-        db_session: Session
+        question_id: str,
+        choice_index: int,
+        db_session: Session,
     ) -> Dict[str, Any]:
-        """
-        Submit and evaluate a user's answer, then determine next action.
+        """Evaluate a MCQ answer deterministically, then generate the next question or end.
 
-        Loads the active quiz session, evaluates the user's answer with the LLM,
-        saves the answer record, and decides whether to continue with another question,
-        ask a follow-up, or end the quiz.
-
-        Args:
-            session_id: ID of the quiz session
-            user_answer: The user's response to the current question
-            db_session: SQLAlchemy database session
-
-        Returns:
-            dict with keys:
-                - evaluation: AnswerEvaluation object with feedback
-                - next_action: Action type ('continue', 'followup', 'end')
-                - next_question: (if continue/followup) The next question to ask
-                - summary_ready: (if end) Boolean indicating summary is ready
-
-        Raises:
-            ValueError: If session not found or not active
-            Exception: On LLM service errors
-
-        Example:
-            >>> result = quiz_service.submit_answer(
-            ...     session_id=1,
-            ...     user_answer="useState manages state in functional components",
-            ...     db_session=db
-            ... )
-            >>> if result["next_action"] == "end":
-            ...     print("Quiz complete")
+        Returns: is_correct, correct_answer, chosen_answer, next_action,
+                 and either (next_question_id, next_question, next_list_answer) or (summary, summary_ready).
         """
         try:
-            # Load quiz session
             quiz_session = db_session.query(QuizSession).filter(
                 QuizSession.session_id == session_id
             ).first()
-
             if not quiz_session:
                 raise ValueError(f"Quiz session {session_id} not found")
-
             if quiz_session.status != "active":
                 raise ValueError(f"Quiz session {session_id} is not active (status: {quiz_session.status})")
 
-            # Load lesson for context
+            mcq_data = self.question_store.get(question_id)
+            if not mcq_data:
+                raise ValueError(f"Question {question_id} not found in store (expired or already answered)")
+
+            chosen_answer = mcq_data.list_answer[choice_index]
+            is_correct = (chosen_answer == mcq_data.correct_answer)
+            self.question_store.delete(question_id)
+
             lesson = quiz_session.lesson
-
-            # Load course to get topic anchor
             course = db_session.query(Course).filter(Course.course_id == lesson.course_id).first()
-            course_topic = course.name if course else lesson.title
-
-            # Build lesson context — prefer content_markdown, fallback to description
-            lesson_content = lesson.content_markdown or lesson.description or f"Bài học về {course_topic}: {lesson.title}"
-
-            # Load concepts
-            concepts = db_session.query(Concept).filter(
-                Concept.lesson_id == lesson.lesson_id
-            ).all()
-            concept_names = [c.name for c in concepts] if concepts else [lesson.title]
-
-            # Get conversation history (may include _checkin and _followup_count metadata)
             all_messages = quiz_session.messages or []
+            stored_checkin = next((m["content"] for m in all_messages if m.get("role") == "_checkin"), None)
+            lesson_content, course_topic = self._load_lesson_context(lesson, course, stored_checkin)
+            concepts, concept_names = self._load_concepts(lesson.lesson_id, lesson.title, db_session)
 
-            # Read consecutive followup count from metadata
-            followup_count = next(
-                (m.get("count", 0) for m in all_messages if m.get("role") == "_followup_count"), 0
-            )
-
-            # Recover user_checkin stored as metadata and add as supplementary context only
-            # stored_checkin does NOT override concept_names — course_topic is the anchor
-            stored_checkin = next(
-                (m["content"] for m in all_messages if m.get("role") == "_checkin"), None
-            )
-            if stored_checkin:
-                lesson_content = f"{lesson_content}\n\nHọc viên mô tả nội dung học hôm nay: {stored_checkin}".strip()
-
-            # Exclude all metadata entries (roles starting with _) from LLM conversation history
             messages = [m for m in all_messages if not m.get("role", "").startswith("_")]
+            messages.append({"role": "user", "content": chosen_answer})
 
-            # Get the last question asked (should be the most recent assistant message)
-            current_question = None
-            if messages and messages[-1].get("role") == "assistant":
-                current_question = messages[-1].get("content")
+            question_count = sum(1 for m in messages if m.get("role") == "assistant")
 
-            if not current_question:
-                raise ValueError(f"No current question found for session {session_id}")
-
-            # Evaluate the answer
-            try:
-                evaluation = self.llm_service.evaluate_answer(
-                    question=current_question,
-                    user_answer=user_answer,
-                    lesson_context=lesson_content,
-                    concepts=concept_names,
-                    course_topic=course_topic
-                )
-            except Exception as e:
-                logger.error(f"Failed to evaluate answer for session {session_id}: {str(e)}")
-                raise
-
-            # Determine which concept this question was testing
-            # For now, we'll use the first concept; in a more sophisticated system,
-            # we'd track which concept each question addresses
-            concept = concepts[0] if concepts else None
-            concept_id = concept.concept_id if concept else None
-
-            # Save the answer
             quiz_answer = QuizAnswer(
                 session_id=session_id,
-                concept_id=concept_id,
-                question=current_question,
-                user_answer=user_answer,
-                is_correct=evaluation.is_correct,
-                engagement_level=evaluation.engagement_level.value
+                concept_id=concepts[0].concept_id if concepts else None,
+                question=mcq_data.question,
+                user_answer=chosen_answer,
+                is_correct=is_correct,
+                question_id=question_id,
+                correct_answer=mcq_data.correct_answer,
+                choices=mcq_data.list_answer,
             )
             db_session.add(quiz_answer)
 
-            # Update conversation history with user answer
-            messages.append({"role": "user", "content": user_answer})
-
-            # Count questions asked so far
-            max_questions = 5
-            question_count = sum(1 for m in messages if m.get("role") == "assistant")
-
-            # Hard cap: force END if question limit reached
-            if question_count >= max_questions:
-                forced_end = NextAction(action_type=ActionType.END, reason="Question limit reached")
-                next_action = forced_end
-            else:
-                # Decide next action via LLM
-                try:
-                    next_action = self.llm_service.decide_next_action(
-                        answer_evaluation=evaluation,
-                        question_count=question_count,
-                        max_questions=max_questions
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to decide next action for session {session_id}: {str(e)}")
-                    raise
-
-            # Cap followup at 1 consecutive: if already followed up once, force CONTINUE
-            if next_action.action_type == ActionType.FOLLOWUP and followup_count >= 1:
-                next_action = NextAction(action_type=ActionType.CONTINUE, reason="Max followups reached, moving to new concept")
-                followup_count = 0
-            elif next_action.action_type == ActionType.FOLLOWUP:
-                followup_count += 1
-            else:
-                followup_count = 0
-
-            # Detect user-requested end (low engagement → engagement_level == "low")
-            user_requested_end = (
-                evaluation.engagement_level.value == "low"
-                and next_action.action_type == ActionType.END
-            )
-
-            result = {
-                "evaluation": evaluation.model_dump(),
-                "next_action": next_action.action_type.value,
-                "reason": next_action.reason,
+            result: Dict[str, Any] = {
+                "is_correct": is_correct,
+                "correct_answer": mcq_data.correct_answer,
+                "chosen_answer": chosen_answer,
                 "question_count": question_count,
-                "user_requested_end": user_requested_end,
             }
-            # Suppress feedback when user is ending — show summary directly
-            if user_requested_end:
-                result["evaluation"]["feedback"] = ""
 
-            # Handle action
-            if next_action.action_type == ActionType.END:
-                # Generate summary before ending
+            max_questions = 5
+            if question_count >= max_questions:
+                quiz_session.status = "completed"
+                quiz_session.completed_at = datetime.utcnow()
+                logger.info(f"Quiz session {session_id} ended after {question_count} questions")
+
                 try:
                     summary = self.llm_service.generate_quiz_summary(
                         lesson_name=lesson.title,
@@ -367,113 +195,55 @@ class QuizService:
                 except Exception:
                     result["summary"] = ""
 
-                # End the quiz
-                quiz_session.status = "completed"
-                quiz_session.completed_at = datetime.utcnow()
-                logger.info(f"Quiz session {session_id} ended after {question_count} questions")
+                result["next_action"] = "end"
                 result["summary_ready"] = True
-
-            elif next_action.action_type == ActionType.FOLLOWUP:
-                # Ask follow-up question
-                if next_action.follow_up_question:
-                    follow_up_question = next_action.follow_up_question
-                else:
-                    # Generate follow-up if not provided
-                    try:
-                        follow_up_question = self.llm_service.generate_quiz_question(
-                            lesson_content=lesson_content,
-                            conversation_history=messages,
-                            concepts=concept_names,
-                            is_first_question=False,
-                            course_topic=course_topic
-                        )
-                    except Exception as e:
-                        logger.error(f"Failed to generate follow-up for session {session_id}: {str(e)}")
-                        raise
-
-                messages.append({"role": "assistant", "content": follow_up_question})
-                result["next_question"] = follow_up_question
-                logger.info(f"Quiz session {session_id}: Follow-up question #{question_count + 1}")
-
-            else:  # CONTINUE
-                # Generate next question
+            else:
                 try:
-                    next_question = self.llm_service.generate_quiz_question(
+                    next_mcq = self.llm_service.generate_mcq_question(
                         lesson_content=lesson_content,
-                        conversation_history=messages,
                         concepts=concept_names,
-                        is_first_question=False,
-                        course_topic=course_topic
+                        conversation_history=messages,
+                        course_topic=course_topic,
                     )
                 except Exception as e:
-                    logger.error(f"Failed to generate next question for session {session_id}: {str(e)}")
+                    logger.error(f"Failed to generate next MCQ for session {session_id}: {e}")
                     raise
 
-                messages.append({"role": "assistant", "content": next_question})
-                result["next_question"] = next_question
-                logger.info(f"Quiz session {session_id}: Next question #{question_count + 1}")
+                self._save_mcq_to_store(next_mcq)
+                messages.append({"role": "assistant", "content": next_mcq.question})
 
-            # Update conversation history — re-attach metadata so it persists
+                result["next_action"] = "continue"
+                result["next_question_id"] = next_mcq.question_id
+                result["next_question"] = next_mcq.question
+                result["next_list_answer"] = next_mcq.list_answer
+
             checkin_entries = [m for m in all_messages if m.get("role") == "_checkin"]
-            followup_entries = [{"role": "_followup_count", "count": followup_count}]
-            quiz_session.messages = checkin_entries + followup_entries + messages
+            quiz_session.messages = checkin_entries + messages
             db_session.commit()
-
             return result
 
         except ValueError as e:
-            logger.error(f"Validation error in submit_answer: {str(e)}")
+            logger.error(f"Validation error in submit_answer: {e}")
             db_session.rollback()
             raise
         except Exception as e:
-            logger.error(f"Unexpected error in submit_answer: {str(e)}")
+            logger.error(f"Unexpected error in submit_answer: {e}")
             db_session.rollback()
             raise
 
     def get_or_generate_summary(
         self,
         session_id: int,
-        db_session: Session
+        db_session: Session,
     ) -> Dict[str, Any]:
-        """
-        Get or generate a post-quiz summary.
-
-        Retrieves the quiz session and all answers, generates a comprehensive
-        summary using the LLM, and saves it to the database.
-
-        Args:
-            session_id: ID of the quiz session
-            db_session: SQLAlchemy database session
-
-        Returns:
-            dict with summary data:
-                - summary_id: The created summary ID
-                - concepts_mastered: List of mastered concept names
-                - concepts_weak: List of weak concept objects with explanations
-                - summary_text: Full text summary
-                - suggestions: Recommendations for next steps
-
-        Raises:
-            ValueError: If session not found
-            Exception: On LLM service errors
-
-        Example:
-            >>> summary = quiz_service.get_or_generate_summary(
-            ...     session_id=1,
-            ...     db_session=db
-            ... )
-            >>> print(summary["summary_text"])
-        """
+        """Get existing summary or generate one via LLM."""
         try:
-            # Load quiz session
             quiz_session = db_session.query(QuizSession).filter(
                 QuizSession.session_id == session_id
             ).first()
-
             if not quiz_session:
                 raise ValueError(f"Quiz session {session_id} not found")
 
-            # Check if summary already exists
             if quiz_session.quiz_summary:
                 logger.info(f"Summary already exists for session {session_id}")
                 return {
@@ -481,48 +251,32 @@ class QuizService:
                     "concepts_mastered": quiz_session.quiz_summary.concepts_mastered or [],
                     "concepts_weak": quiz_session.quiz_summary.concepts_weak or [],
                     "session_id": session_id,
-                    "already_exists": True
+                    "already_exists": True,
                 }
 
-            # Load lesson content
             lesson = quiz_session.lesson
             lesson_content = lesson.description or ""
-
-            # Load all concepts
-            concepts = db_session.query(Concept).filter(
-                Concept.lesson_id == lesson.lesson_id
-            ).all()
-            concept_names = [c.name for c in concepts]
-
-            # Get conversation history from quiz session
+            _, concept_names = self._load_concepts(lesson.lesson_id, lesson.title, db_session)
             messages = quiz_session.messages or []
 
-            # Generate summary
             try:
                 llm_summary = self.llm_service.generate_quiz_summary(
                     lesson_name=lesson.title,
                     lesson_content=lesson_content,
                     conversation_history=messages,
-                    concepts=concept_names
+                    concepts=concept_names,
                 )
             except Exception as e:
-                logger.error(f"Failed to generate summary for session {session_id}: {str(e)}")
+                logger.error(f"Failed to generate summary for session {session_id}: {e}")
                 raise
 
-            # Create QuizSummary record
-            # Convert WeakConcept objects to JSON-serializable dicts
             weak_concepts_json = [
-                {
-                    "concept": wc.concept,
-                    "user_answer": wc.user_answer,
-                    "correct_explanation": wc.correct_explanation
-                }
+                {"concept": wc.concept, "user_answer": wc.user_answer, "correct_explanation": wc.correct_explanation}
                 for wc in llm_summary.concepts_weak
             ]
-
             quiz_summary = QuizSummary(
                 session_id=session_id,
-                user_course_id=None,  # Can be set later if needed
+                user_course_id=None,
                 concepts_mastered=llm_summary.concepts_mastered,
                 concepts_weak=weak_concepts_json,
                 next_review_at=datetime.utcnow() + timedelta(days=_next_review_interval_days(0)),
@@ -533,10 +287,8 @@ class QuizService:
 
             logger.info(
                 f"Generated summary for session {session_id} "
-                f"(mastered={len(llm_summary.concepts_mastered)}, "
-                f"weak={len(llm_summary.concepts_weak)})"
+                f"(mastered={len(llm_summary.concepts_mastered)}, weak={len(llm_summary.concepts_weak)})"
             )
-
             return {
                 "summary_id": quiz_summary.summary_id,
                 "concepts_mastered": llm_summary.concepts_mastered,
@@ -544,66 +296,31 @@ class QuizService:
                 "summary_text": llm_summary.summary_text,
                 "suggestions": llm_summary.suggestions,
                 "engagement_quality": llm_summary.engagement_quality.value,
-                "session_id": session_id
+                "session_id": session_id,
             }
 
         except ValueError as e:
-            logger.error(f"Validation error in get_or_generate_summary: {str(e)}")
+            logger.error(f"Validation error in get_or_generate_summary: {e}")
             raise
         except Exception as e:
-            logger.error(f"Unexpected error in get_or_generate_summary: {str(e)}")
+            logger.error(f"Unexpected error in get_or_generate_summary: {e}")
             db_session.rollback()
             raise
 
-    def get_quiz_status(
-        self,
-        session_id: int,
-        db_session: Session
-    ) -> Dict[str, Any]:
-        """
-        Get the current status of a quiz session.
-
-        Returns information about the quiz session including status, progress,
-        and whether a summary is available.
-
-        Args:
-            session_id: ID of the quiz session
-            db_session: SQLAlchemy database session
-
-        Returns:
-            dict with keys:
-                - session_id: The quiz session ID
-                - status: 'active' or 'completed'
-                - question_count: Number of questions asked so far
-                - answer_count: Number of answers submitted
-                - has_summary: Whether a summary has been generated
-                - lesson_name: Name of the lesson being quizzed on
-                - user_id: ID of the user
-
-        Raises:
-            ValueError: If session not found
-
-        Example:
-            >>> status = quiz_service.get_quiz_status(1, db_session=db)
-            >>> print(f"Status: {status['status']}, Questions: {status['question_count']}")
-        """
+    def get_quiz_status(self, session_id: int, db_session: Session) -> Dict[str, Any]:
+        """Return current status of a quiz session."""
         try:
             quiz_session = db_session.query(QuizSession).filter(
                 QuizSession.session_id == session_id
             ).first()
-
             if not quiz_session:
                 raise ValueError(f"Quiz session {session_id} not found")
 
-            # Count questions (assistant messages in conversation)
             messages = quiz_session.messages or []
             question_count = sum(1 for m in messages if m.get("role") == "assistant")
-
-            # Count answers
-            answers = db_session.query(QuizAnswer).filter(
+            answer_count = db_session.query(QuizAnswer).filter(
                 QuizAnswer.session_id == session_id
-            ).all()
-            answer_count = len(answers)
+            ).count()
 
             return {
                 "session_id": session_id,
@@ -614,12 +331,11 @@ class QuizService:
                 "lesson_name": quiz_session.lesson.title,
                 "user_id": quiz_session.user_id,
                 "started_at": quiz_session.started_at.isoformat() if quiz_session.started_at else None,
-                "completed_at": quiz_session.completed_at.isoformat() if quiz_session.completed_at else None
+                "completed_at": quiz_session.completed_at.isoformat() if quiz_session.completed_at else None,
             }
-
         except ValueError as e:
-            logger.error(f"Validation error in get_quiz_status: {str(e)}")
+            logger.error(f"Validation error in get_quiz_status: {e}")
             raise
         except Exception as e:
-            logger.error(f"Unexpected error in get_quiz_status: {str(e)}")
+            logger.error(f"Unexpected error in get_quiz_status: {e}")
             raise

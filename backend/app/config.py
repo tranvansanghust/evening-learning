@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     llm_fast_model: str = "gpt-4o-mini"
     llm_smart_model: str = "gpt-4o"
 
+    # Redis Configuration
+    redis_url: str = "redis://localhost:6379/0"
+
     # FastAPI Configuration
     api_host: str = "0.0.0.0"
     api_port: int = 8000

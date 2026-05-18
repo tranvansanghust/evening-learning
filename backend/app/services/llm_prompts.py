@@ -97,6 +97,41 @@ Chỉ trả về câu hỏi, không thêm bất kỳ text nào khác."""
         return prompt
 
     @staticmethod
+    def mcq_question_generation(
+        lesson_content: str,
+        concepts: List[str],
+        conversation_history: List[Dict[str, str]],
+        course_topic: str = ""
+    ) -> str:
+        """Generate a multiple-choice question with 1 correct answer and 2 distractors."""
+        history_section = ""
+        if conversation_history:
+            asked = [m["content"] for m in conversation_history if m.get("role") == "assistant"]
+            if asked:
+                history_section = "Câu hỏi đã hỏi:\n" + "\n".join(f"- {q}" for q in asked) + "\n\n"
+
+        concepts_str = ", ".join(concepts)
+        topic_section = f'về "{course_topic}" ' if course_topic else ""
+
+        return f"""Tạo 1 câu hỏi trắc nghiệm {topic_section}bằng tiếng Việt từ nội dung bài học sau:
+
+---
+{lesson_content}
+---
+
+Khái niệm cần kiểm tra: {concepts_str}
+
+{history_section}Yêu cầu:
+- Câu hỏi phải liên quan đến "{course_topic}" nếu được cung cấp
+- Hỏi về khái niệm chưa được hỏi trong lịch sử trên
+- Có đúng 1 đáp án đúng và 2 đáp án sai hợp lý (gây nhầm lẫn)
+- Các đáp án ngắn gọn (tối đa 15 từ mỗi đáp án)
+- Bằng tiếng Việt
+
+Chỉ trả về JSON object, không có markdown hay text khác:
+{{"question": "<câu hỏi>", "correct_answer": "<đáp án đúng>", "distractors": ["<sai 1>", "<sai 2>"]}}"""
+
+    @staticmethod
     def answer_evaluation(
         question: str,
         user_answer: str,

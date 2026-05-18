@@ -22,9 +22,12 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import (
+    Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
+    InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery,
+)
 from aiogram.utils.chat_action import ChatActionSender
 from sqlalchemy.orm import Session
 
@@ -32,6 +35,8 @@ from app.services.onboarding_service import OnboardingService
 from app.services.progress_service import ProgressService
 from app.services.quiz_service import QuizService
 from app.services.llm_service import LLMService
+from app.services.question_store import make_question_store
+from app.config import settings
 from app.services.llm_topic_suggester import LLMTopicSuggester
 from app.services.message_formatter import format_progress, format_quiz_list, format_quiz_detail
 from app.services.llm_assessment import LLMAssessmentGenerator
@@ -42,6 +47,31 @@ logger = logging.getLogger(__name__)
 
 # Aiogram router for polling mode
 router = Router()
+
+# Redis-backed question store singleton (lazy connection on first use)
+_question_store = make_question_store(settings.redis_url)
+
+
+def _make_quiz_keyboard(session_id: int, question_id: str, list_answer: list) -> InlineKeyboardMarkup:
+    """Build inline keyboard with one button per answer choice."""
+    labels = ["A", "B", "C", "D"]
+    buttons = [
+        [InlineKeyboardButton(
+            text=f"{labels[i]}. {ans}",
+            callback_data=f"quiz:{session_id}:{question_id}:{i}",
+        )]
+        for i, ans in enumerate(list_answer)
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def _make_llm_service() -> LLMService:
+    return LLMService(
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url,
+        fast_model=settings.llm_fast_model,
+        smart_model=settings.llm_smart_model,
+    )
 
 
 def get_current_lesson(user_id: int, course_id: int, db: Session):
@@ -577,13 +607,13 @@ async def handle_text(message: Message) -> None:
             await _handle_checkin(message, text, user, db)
             return
 
-        # Ưu tiên 3: đang trong quiz
+        # Ưu tiên 3: đang trong quiz — user phải dùng inline button, không nhập text
         active_session = db.query(QuizSession).filter(
             QuizSession.user_id == user_id,
             QuizSession.status == "active",
         ).first() if user_id else None
         if active_session is not None:
-            await _handle_quiz_answer(message, text, active_session, db)
+            await message.answer("Hãy chọn đáp án bằng cách nhấn vào một trong các nút bên trên nhé! 👆")
             return
 
         # Fallback
@@ -793,12 +823,7 @@ async def _handle_checkin(
     user.checkin_pending = False
     db.commit()
 
-    llm_service = LLMService(
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_base_url,
-        fast_model=settings.llm_fast_model,
-        smart_model=settings.llm_smart_model,
-    )
+    llm_service = _make_llm_service()
 
     # Ensure content_markdown exists trước khi quiz (generate nếu chưa có)
     if not lesson.content_markdown or lesson.content_markdown.startswith("```"):
@@ -823,7 +848,7 @@ async def _handle_checkin(
     if feedback:
         await message.answer(feedback)
 
-    quiz_service = QuizService(llm_service)
+    quiz_service = QuizService(llm_service, _question_store)
     async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
         result = await asyncio.to_thread(
             lambda: quiz_service.start_quiz(
@@ -834,69 +859,96 @@ async def _handle_checkin(
             )
         )
 
+    keyboard = _make_quiz_keyboard(result["session_id"], result["question_id"], result["list_answer"])
     await message.answer(
-        f"Quiz *{lesson.title}* bắt đầu! 📝\n\n{result['first_question']}",
-        parse_mode="Markdown",
+        f"Quiz <b>{lesson.title}</b> bắt đầu! 📝\n\n{result['question']}",
+        parse_mode="HTML",
+        reply_markup=keyboard,
     )
 
 
-async def _handle_quiz_answer(message: Message, text: str, active_session, db) -> None:
-    """Xử lý câu trả lời quiz, gửi feedback và câu tiếp theo hoặc tổng kết."""
-    from app.config import settings
+@router.callback_query(F.data.startswith("quiz:"))
+async def handle_quiz_callback(callback: CallbackQuery) -> None:
+    """Xử lý khi user nhấn nút chọn đáp án MCQ."""
+    await callback.answer()  # tắt loading spinner
 
-    llm_service = LLMService(
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_base_url,
-        fast_model=settings.llm_fast_model,
-        smart_model=settings.llm_smart_model,
-    )
-    quiz_service = QuizService(llm_service)
-    async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
-        result = await asyncio.to_thread(
-            lambda: quiz_service.submit_answer(
-                session_id=active_session.session_id,
-                user_answer=text,
-                db_session=db,
+    parts = callback.data.split(":")
+    # format: quiz:{session_id}:{question_id}:{choice_index}
+    if len(parts) != 4:
+        await callback.message.answer("❌ Dữ liệu không hợp lệ.")
+        return
+
+    session_id = int(parts[1])
+    question_id = parts[2]
+    choice_index = int(parts[3])
+
+    db = SessionLocal()
+    try:
+        from app.models import QuizSession, UserCourse
+        quiz_session = db.query(QuizSession).filter(QuizSession.session_id == session_id).first()
+        if not quiz_session or quiz_session.status != "active":
+            await callback.message.answer("Quiz đã kết thúc hoặc không tồn tại.")
+            return
+
+        llm_service = _make_llm_service()
+        quiz_service = QuizService(llm_service, _question_store)
+
+        async with ChatActionSender.typing(bot=callback.message.bot, chat_id=callback.message.chat.id):
+            result = await asyncio.to_thread(
+                lambda: quiz_service.submit_answer(
+                    session_id=session_id,
+                    question_id=question_id,
+                    choice_index=choice_index,
+                    db_session=db,
+                )
             )
-        )
 
-    evaluation = result.get("evaluation", {})
-    feedback = evaluation.get("feedback", "")
-    next_action = result.get("next_action", "continue")
-    user_requested_end = result.get("user_requested_end", False)
+        is_correct = result.get("is_correct", False)
+        correct_answer = result.get("correct_answer", "")
+        feedback = "✅ Đúng rồi!" if is_correct else f"❌ Chưa đúng. Đáp án đúng là: <b>{correct_answer}</b>"
+        await callback.message.answer(feedback, parse_mode="HTML")
 
-    if feedback and not user_requested_end:
-        await message.answer(feedback)
+        next_action = result.get("next_action", "continue")
 
-    if next_action == "end":
-        # Update last_activity_at on quiz completion
-        from app.models import UserCourse
-        enrollment = db.query(UserCourse).filter(
-            UserCourse.user_id == active_session.user_id,
-            UserCourse.status == "IN_PROGRESS",
-        ).first()
-        if enrollment:
-            enrollment.last_activity_at = datetime.utcnow()
-            db.commit()
+        if next_action == "end":
+            enrollment = db.query(UserCourse).filter(
+                UserCourse.user_id == quiz_session.user_id,
+                UserCourse.status == "IN_PROGRESS",
+            ).first()
+            if enrollment:
+                enrollment.last_activity_at = datetime.utcnow()
+                db.commit()
 
-        lesson_name = active_session.lesson.title if active_session.lesson else "Bài học"
-        try:
-            summary_data = quiz_service.get_or_generate_summary(
-                session_id=active_session.session_id, db_session=db
-            )
-            msg = format_quiz_detail(
-                lesson_name=lesson_name,
-                concepts_mastered=summary_data.get("concepts_mastered", []),
-                concepts_weak=summary_data.get("concepts_weak", []),
-            )
-        except Exception:
-            summary = result.get("summary", "")
-            msg = (
-                f"Quiz hoàn thành! ✅\n\n{summary}\n\nGõ /today để xem bài tiếp theo 📚"
-                if summary else "Quiz hoàn thành! ✅\n\nGõ /today để xem bài tiếp theo 📚"
-            )
-        await message.answer(msg, parse_mode="HTML")
-    else:
-        next_question = result.get("next_question", "")
-        if next_question:
-            await message.answer(next_question)
+            lesson_name = quiz_session.lesson.title if quiz_session.lesson else "Bài học"
+            try:
+                summary_data = quiz_service.get_or_generate_summary(
+                    session_id=session_id, db_session=db
+                )
+                msg = format_quiz_detail(
+                    lesson_name=lesson_name,
+                    concepts_mastered=summary_data.get("concepts_mastered", []),
+                    concepts_weak=summary_data.get("concepts_weak", []),
+                )
+            except Exception:
+                summary = result.get("summary", "")
+                msg = (
+                    f"Quiz hoàn thành! ✅\n\n{summary}\n\nGõ /today để xem bài tiếp theo 📚"
+                    if summary else "Quiz hoàn thành! ✅\n\nGõ /today để xem bài tiếp theo 📚"
+                )
+            await callback.message.answer(msg, parse_mode="HTML")
+        else:
+            next_question = result.get("next_question", "")
+            next_question_id = result.get("next_question_id", "")
+            next_list_answer = result.get("next_list_answer", [])
+            if next_question and next_question_id:
+                keyboard = _make_quiz_keyboard(session_id, next_question_id, next_list_answer)
+                await callback.message.answer(next_question, reply_markup=keyboard)
+
+    except ValueError as e:
+        logger.error(f"Quiz callback error session={session_id}: {e}")
+        await callback.message.answer("❌ Có lỗi xảy ra khi xử lý câu trả lời. Thử lại nhé!")
+    except Exception as e:
+        logger.error(f"Unexpected quiz callback error session={session_id}: {e}")
+        await callback.message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại!")
+    finally:
+        db.close()
