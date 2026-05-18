@@ -32,6 +32,8 @@ services:
     environment:
       DB_HOST: mysql
       REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./lessons:/lessons:ro
     depends_on:
       mysql:
         condition: service_healthy
@@ -48,6 +50,8 @@ services:
     environment:
       DB_HOST: mysql
       REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./lessons:/lessons:ro
     depends_on:
       mysql:
         condition: service_healthy
