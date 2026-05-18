@@ -292,6 +292,16 @@ class TestLLMServiceCourseTopicParam:
 # Test Group 4: QuizService.start_quiz() — Course loading and topic anchor
 # ---------------------------------------------------------------------------
 
+def _make_mcq_question(question_id="test-uuid-1234"):
+    from app.services.llm_service import MCQQuestion
+    return MCQQuestion(
+        question_id=question_id,
+        question="Câu hỏi về piano?",
+        list_answer=["Đáp án A", "Đáp án B", "Đáp án C"],
+        correct_answer="Đáp án A",
+    )
+
+
 class TestStartQuizCourseTopicAnchor:
     """start_quiz() must load Course, use course.name as topic, not let user_checkin override concept_names."""
 
@@ -326,7 +336,7 @@ class TestStartQuizCourseTopicAnchor:
         return db
 
     def test_start_quiz_loads_course_topic(self):
-        """start_quiz() must query Course and use course.name as course_topic."""
+        """start_quiz() must query Course and pass course.name as course_topic to generate_mcq_question."""
         from app.services.quiz_service import QuizService
 
         lesson = make_lesson(course_id=10, title="Section 1")
@@ -334,41 +344,25 @@ class TestStartQuizCourseTopicAnchor:
         user = make_user()
 
         mock_llm = MagicMock()
-        mock_llm.generate_quiz_question.return_value = "Câu hỏi đầu tiên về piano?"
+        mock_llm.generate_mcq_question.return_value = _make_mcq_question()
 
         db = self._make_db_session(user, lesson, course)
 
-        # Capture the session that's created
         created_sessions = []
-        original_add = db.add
         def capture_add(obj):
             created_sessions.append(obj)
             if hasattr(obj, 'session_id'):
                 obj.session_id = 42
         db.add.side_effect = capture_add
 
-        # After flush, give session_id
-        def flush_side_effect():
-            for obj in created_sessions:
-                if hasattr(obj, 'session_id') and obj.session_id is None:
-                    obj.session_id = 42
-        db.flush.side_effect = flush_side_effect
+        svc = QuizService(llm_service=mock_llm, question_store=MagicMock())
+        svc.start_quiz(user_id=1, lesson_id=5, user_checkin=None, db_session=db)
 
-        svc = QuizService(llm_service=mock_llm)
-        result = svc.start_quiz(
-            user_id=1,
-            lesson_id=5,
-            user_checkin="Học về chia động từ tiếng Anh",
-            db_session=db
-        )
-
-        # LLM must have been called with course_topic
-        call_kwargs = mock_llm.generate_quiz_question.call_args
+        call_kwargs = mock_llm.generate_mcq_question.call_args
         assert call_kwargs is not None
-
-        # Check that course_topic was passed (either as arg or kwarg)
         all_args = list(call_kwargs.args) + list(call_kwargs.kwargs.values())
-        assert "Piano cơ bản" in all_args, f"course_topic 'Piano cơ bản' not found in call args: {call_kwargs}"
+        assert "Piano cơ bản" in all_args, \
+            f"course_topic 'Piano cơ bản' not found in generate_mcq_question args: {call_kwargs}"
 
     def test_user_checkin_does_not_override_concept_names(self):
         """user_checkin must NOT replace concept_names when lesson has no concepts in DB."""
@@ -378,35 +372,21 @@ class TestStartQuizCourseTopicAnchor:
         course = make_course(name="Piano cơ bản")
         user = make_user()
 
-        # No concepts in DB (empty list)
         mock_llm = MagicMock()
-        mock_llm.generate_quiz_question.return_value = "Câu hỏi?"
+        mock_llm.generate_mcq_question.return_value = _make_mcq_question()
 
         db = self._make_db_session(user, lesson, course, concepts=[])
 
         created_sessions = []
-        def capture_add(obj):
-            created_sessions.append(obj)
-        db.add.side_effect = capture_add
+        db.add.side_effect = lambda obj: created_sessions.append(obj)
 
-        svc = QuizService(llm_service=mock_llm)
-        svc.start_quiz(
-            user_id=1,
-            lesson_id=5,
-            user_checkin="Chia động từ tiếng Anh",
-            db_session=db
+        svc = QuizService(llm_service=mock_llm, question_store=MagicMock())
+        svc.start_quiz(user_id=1, lesson_id=5, user_checkin="Chia động từ tiếng Anh", db_session=db)
+
+        call_kwargs = mock_llm.generate_mcq_question.call_args
+        concepts_arg = call_kwargs.kwargs.get("concepts") or (
+            call_kwargs.args[1] if len(call_kwargs.args) >= 2 else None
         )
-
-        # Check what concepts were passed to generate_quiz_question
-        call_kwargs = mock_llm.generate_quiz_question.call_args
-        # concepts argument — find it
-        concepts_arg = None
-        if call_kwargs.kwargs.get("concepts") is not None:
-            concepts_arg = call_kwargs.kwargs["concepts"]
-        elif len(call_kwargs.args) >= 3:
-            concepts_arg = call_kwargs.args[2]
-
-        # concepts must be lesson.title or similar, NOT the user_checkin text
         if concepts_arg is not None:
             assert "Chia động từ tiếng Anh" not in concepts_arg, \
                 f"user_checkin text found in concept_names: {concepts_arg}"
@@ -416,40 +396,23 @@ class TestStartQuizCourseTopicAnchor:
         from app.services.quiz_service import QuizService
 
         markdown_content = "# Piano cơ bản\n\nNốt Đô là nốt nhạc đầu tiên..."
-        lesson = make_lesson(
-            title="Section 1",
-            description="Mô tả ngắn",
-            content_markdown=markdown_content
-        )
+        lesson = make_lesson(title="Section 1", description="Mô tả ngắn", content_markdown=markdown_content)
         course = make_course(name="Piano cơ bản")
         user = make_user()
 
         mock_llm = MagicMock()
-        mock_llm.generate_quiz_question.return_value = "Câu hỏi?"
+        mock_llm.generate_mcq_question.return_value = _make_mcq_question()
 
         db = self._make_db_session(user, lesson, course, concepts=[])
+        db.add.side_effect = lambda obj: None
 
-        created_sessions = []
-        def capture_add(obj):
-            created_sessions.append(obj)
-        db.add.side_effect = capture_add
+        svc = QuizService(llm_service=mock_llm, question_store=MagicMock())
+        svc.start_quiz(user_id=1, lesson_id=5, user_checkin=None, db_session=db)
 
-        svc = QuizService(llm_service=mock_llm)
-        svc.start_quiz(
-            user_id=1,
-            lesson_id=5,
-            user_checkin=None,
-            db_session=db
+        call_kwargs = mock_llm.generate_mcq_question.call_args
+        lesson_content_arg = call_kwargs.kwargs.get("lesson_content") or (
+            call_kwargs.args[0] if call_kwargs.args else None
         )
-
-        # lesson_content passed to generate_quiz_question must contain content_markdown
-        call_kwargs = mock_llm.generate_quiz_question.call_args
-        lesson_content_arg = None
-        if call_kwargs.kwargs.get("lesson_content") is not None:
-            lesson_content_arg = call_kwargs.kwargs["lesson_content"]
-        elif len(call_kwargs.args) >= 1:
-            lesson_content_arg = call_kwargs.args[0]
-
         assert lesson_content_arg is not None
         assert "Nốt Đô là nốt nhạc đầu tiên" in lesson_content_arg, \
             f"content_markdown not found in lesson_content passed to LLM: {lesson_content_arg}"
@@ -489,109 +452,75 @@ class TestSubmitAnswerCourseTopicAnchor:
         return db
 
     def test_submit_answer_loads_course_topic(self):
-        """submit_answer() must query Course and pass course_topic to evaluate_answer."""
+        """submit_answer() generates next MCQ using course.name as course_topic."""
         from app.services.quiz_service import QuizService
-        from app.services.llm_service import AnswerEvaluation, EngagementLevel, NextAction, ActionType
+        from app.services.question_store import MCQData
 
         lesson = make_lesson(course_id=10, title="Section 1")
         course = make_course(course_id=10, name="Piano cơ bản")
 
+        # 4 previous assistant messages → submit_answer will generate next (5th) question
         messages = [
-            {"role": "_checkin", "content": "Chia động từ tiếng Anh"},
-            {"role": "assistant", "content": "Nốt Đô nằm ở đâu?"}
+            {"role": "assistant", "content": f"Câu hỏi {i}?"} for i in range(4)
         ]
         quiz_session = make_quiz_session(session_id=42, lesson=lesson, messages=messages)
 
-        mock_evaluation = AnswerEvaluation(
-            is_correct=True,
-            confidence=0.9,
-            engagement_level=EngagementLevel.HIGH,
-            key_concepts_covered=["Nốt Đô"],
-            key_concepts_missed=[],
-            feedback="Tốt lắm!"
-        )
-        mock_next_action = NextAction(
-            action_type=ActionType.END,
-            reason="Done",
-            follow_up_question=None
-        )
-
         mock_llm = MagicMock()
-        mock_llm.evaluate_answer.return_value = mock_evaluation
-        mock_llm.decide_next_action.return_value = mock_next_action
-        mock_llm.generate_quiz_summary.return_value = MagicMock(
-            summary_text="Tóm tắt", concepts_mastered=[], concepts_weak=[]
+        mock_llm.generate_mcq_question.return_value = _make_mcq_question("next-uuid")
+
+        mock_store = MagicMock()
+        mock_store.get.return_value = MCQData(
+            question="Nốt Đô nằm ở đâu?",
+            list_answer=["A", "B", "C"],
+            correct_answer="A",
         )
 
         db = self._make_db_with_session(quiz_session, lesson, course, concepts=[])
 
-        svc = QuizService(llm_service=mock_llm)
-        svc.submit_answer(
-            session_id=42,
-            user_answer="Phím trắng bên trái",
-            db_session=db
-        )
+        svc = QuizService(llm_service=mock_llm, question_store=mock_store)
+        svc.submit_answer(session_id=42, question_id="some-uuid", choice_index=0, db_session=db)
 
-        # evaluate_answer must have been called with course_topic
-        eval_call = mock_llm.evaluate_answer.call_args
-        assert eval_call is not None
-        all_args = list(eval_call.args) + list(eval_call.kwargs.values())
+        # generate_mcq_question phải được gọi với course_topic
+        call_kwargs = mock_llm.generate_mcq_question.call_args
+        assert call_kwargs is not None
+        all_args = list(call_kwargs.args) + list(call_kwargs.kwargs.values())
         assert "Piano cơ bản" in all_args, \
-            f"course_topic 'Piano cơ bản' not found in evaluate_answer call args: {eval_call}"
+            f"course_topic 'Piano cơ bản' not found in generate_mcq_question args: {call_kwargs}"
 
     def test_submit_answer_stored_checkin_does_not_override_concept_names(self):
-        """submit_answer() must NOT let stored_checkin replace concept_names."""
+        """submit_answer() concepts must come from DB, not from stored _checkin message."""
         from app.services.quiz_service import QuizService
-        from app.services.llm_service import AnswerEvaluation, EngagementLevel, NextAction, ActionType
+        from app.services.question_store import MCQData
 
         lesson = make_lesson(course_id=10, title="Section 1")
         course = make_course(course_id=10, name="Piano cơ bản")
 
-        # Messages include a _checkin with off-topic content
         messages = [
             {"role": "_checkin", "content": "Chia động từ tiếng Anh"},
-            {"role": "assistant", "content": "Nốt Đô nằm ở đâu?"}
+        ] + [
+            {"role": "assistant", "content": f"Câu hỏi {i}?"} for i in range(4)
         ]
         quiz_session = make_quiz_session(session_id=42, lesson=lesson, messages=messages)
 
-        mock_evaluation = AnswerEvaluation(
-            is_correct=True,
-            confidence=0.9,
-            engagement_level=EngagementLevel.MEDIUM,
-            key_concepts_covered=[],
-            key_concepts_missed=[],
-            feedback="OK"
-        )
-        mock_next_action = NextAction(
-            action_type=ActionType.END,
-            reason="Done",
-            follow_up_question=None
-        )
-
         mock_llm = MagicMock()
-        mock_llm.evaluate_answer.return_value = mock_evaluation
-        mock_llm.decide_next_action.return_value = mock_next_action
-        mock_llm.generate_quiz_summary.return_value = MagicMock(
-            summary_text="Tóm tắt", concepts_mastered=[], concepts_weak=[]
+        mock_llm.generate_mcq_question.return_value = _make_mcq_question("next-uuid")
+
+        mock_store = MagicMock()
+        mock_store.get.return_value = MCQData(
+            question="Nốt Đô nằm ở đâu?",
+            list_answer=["A", "B", "C"],
+            correct_answer="A",
         )
 
         db = self._make_db_with_session(quiz_session, lesson, course, concepts=[])
 
-        svc = QuizService(llm_service=mock_llm)
-        svc.submit_answer(
-            session_id=42,
-            user_answer="Phím trắng bên trái",
-            db_session=db
+        svc = QuizService(llm_service=mock_llm, question_store=mock_store)
+        svc.submit_answer(session_id=42, question_id="some-uuid", choice_index=0, db_session=db)
+
+        call_kwargs = mock_llm.generate_mcq_question.call_args
+        concepts_arg = call_kwargs.kwargs.get("concepts") or (
+            call_kwargs.args[1] if len(call_kwargs.args) >= 2 else None
         )
-
-        # Concepts passed to evaluate_answer must NOT be the checkin text
-        eval_call = mock_llm.evaluate_answer.call_args
-        concepts_arg = None
-        if eval_call.kwargs.get("concepts") is not None:
-            concepts_arg = eval_call.kwargs["concepts"]
-        elif len(eval_call.args) >= 4:
-            concepts_arg = eval_call.args[3]
-
         if concepts_arg is not None:
             assert "Chia động từ tiếng Anh" not in concepts_arg, \
-                f"stored_checkin found in concept_names passed to evaluate: {concepts_arg}"
+                f"stored_checkin found in concept_names: {concepts_arg}"

@@ -72,6 +72,20 @@ def _make_quiz_keyboard(session_id: int, question_id: str, list_answer: list) ->
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def _build_preset_menu() -> tuple[str, InlineKeyboardMarkup]:
+    """Build the preset-course selection shown in /start."""
+    from app.services.lesson_loader import LessonLoader
+    courses = LessonLoader().list_courses()
+    lines = [f"📚 <b>{c['title']}</b> ({c['total_lessons']} bài)" for c in courses]
+    buttons = [[
+        InlineKeyboardButton(
+            text=f"📚 {c['title']}",
+            callback_data=f"preset:{c['slug']}",
+        )
+    ] for c in courses]
+    return "\n".join(lines), InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def _make_llm_service() -> LLMService:
     return LLMService(
         api_key=settings.llm_api_key,
@@ -125,30 +139,34 @@ async def cmd_start(message: Message) -> None:
         ob_state = onboarding_service.get_onboarding_state(user.user_id)
 
         if ob_state is not None:
-            # Đang giữa chừng onboarding → tiếp tục từ bước hiện tại
+            # Đang giữa chừng onboarding → tiếp tục
             logger.info(f"User {user.user_id} resuming onboarding at step: {ob_state.current_step}")
             await message.answer(
-                f"👋 Chào lại {username}! Bạn đang onboarding dở, tiếp tục nhé.\n\n"
-                "Bạn muốn học gì?\n"
-                "(Paste link Udemy hoặc gõ tên chủ đề)"
+                f"👋 Chào lại {username}! Bạn đang chọn khoá học dở, tiếp tục nhé.\n\n"
+                "Nhập tên chủ đề hoặc link Udemy bạn muốn học:"
             )
         else:
-            # Chưa có state → bắt đầu onboarding mới
-            logger.info(f"Creating onboarding state for user {user.user_id}")
-            onboarding_service.create_onboarding_state(user.user_id)
-            onboarding_service.update_onboarding_state(
-                user_id=user.user_id, current_step="course_input"
-            )
-            logger.info(f"Onboarding state created for user {user.user_id}, step=course_input")
-            await message.answer(
-                f"👋 Chào {username}! Mình là học bạn AI của bạn 🤖\n\n"
-                "Mình giúp bạn:\n"
-                "• Học có hệ thống 📚\n"
-                "• Kiểm tra hiểu biết qua quiz 📝\n"
-                "• Theo dõi tiến độ 📈\n\n"
-                "Bạn muốn học gì?\n"
-                "(Paste link Udemy hoặc gõ tên chủ đề)"
-            )
+            # Chưa có state → hiển thị menu khoá học có sẵn
+            logger.info(f"Showing course menu for user {user.user_id}")
+            preset_text, preset_keyboard = _build_preset_menu()
+            if preset_text:
+                intro = (
+                    f"👋 Chào {username}! Mình là học bạn AI của bạn 🤖\n\n"
+                    "Mình có sẵn các khoá học sau:\n\n"
+                    f"{preset_text}\n\n"
+                    "Nhấn để bắt đầu ngay, hoặc nhập tên chủ đề bạn muốn học 👇"
+                )
+                await message.answer(intro, parse_mode="HTML", reply_markup=preset_keyboard)
+            else:
+                # Không có khoá học sẵn → vào onboarding bình thường
+                onboarding_service.create_onboarding_state(user.user_id)
+                onboarding_service.update_onboarding_state(
+                    user_id=user.user_id, current_step="course_input"
+                )
+                await message.answer(
+                    f"👋 Chào {username}! Mình là học bạn AI của bạn 🤖\n\n"
+                    "Bạn muốn học gì?\n(Paste link Udemy hoặc gõ tên chủ đề)"
+                )
     except Exception as e:
         logger.error(f"Error in cmd_start for telegram_id {telegram_id}: {e}", exc_info=True)
         await message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại sau!")
@@ -627,6 +645,22 @@ async def handle_text(message: Message) -> None:
             await message.answer("Hãy chọn đáp án bằng cách nhấn vào một trong các nút bên trên nhé! 👆")
             return
 
+        # Ưu tiên 3: user đang ở màn preset menu và gõ chủ đề tùy chọn
+        if user_id and text:
+            from app.models import UserCourse
+            has_course = db.query(UserCourse).filter(
+                UserCourse.user_id == user_id,
+                UserCourse.status == "IN_PROGRESS",
+            ).first()
+            if not has_course:
+                # Tạo onboarding_state và xử lý như course_input
+                onboarding_service.create_onboarding_state(user_id)
+                new_state = onboarding_service.update_onboarding_state(
+                    user_id=user_id, current_step="course_input"
+                )
+                await _handle_onboarding_step(message, text, user_id, new_state, onboarding_service)
+                return
+
         # Fallback
         await message.answer(
             "Gõ /start để bắt đầu học nhé! 👋\n\n"
@@ -866,6 +900,55 @@ async def handle_quiz_callback(callback: CallbackQuery) -> None:
         await callback.message.answer("❌ Có lỗi xảy ra khi xử lý câu trả lời. Thử lại nhé!")
     except Exception as e:
         logger.error(f"Unexpected quiz callback error session={session_id}: {e}")
+        await callback.message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại!")
+    finally:
+        db.close()
+
+
+@router.callback_query(F.data.startswith("preset:"))
+async def handle_preset_callback(callback: CallbackQuery) -> None:
+    """User chọn một khoá học có sẵn từ menu /start."""
+    await callback.answer()
+
+    slug = callback.data.split(":", 1)[1]
+    telegram_id = str(callback.from_user.id)
+
+    db = SessionLocal()
+    try:
+        from app.models import User, UserCourse, Course
+        user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        if not user:
+            await callback.message.answer("Gõ /start để bắt đầu nhé!")
+            return
+
+        active = db.query(UserCourse).filter(
+            UserCourse.user_id == user.user_id,
+            UserCourse.status == "IN_PROGRESS",
+        ).first()
+        if active:
+            await callback.message.answer(
+                "Bạn đang học một khoá rồi! Gõ /today để tiếp tục, hoặc /reset để bắt đầu lại."
+            )
+            return
+
+        onboarding_service = OnboardingService(db)
+        async with ChatActionSender.typing(bot=callback.message.bot, chat_id=callback.message.chat.id):
+            first_lesson = await asyncio.to_thread(
+                onboarding_service.load_and_enroll_preset_course,
+                user.user_id,
+                slug,
+            )
+
+        if not first_lesson:
+            await callback.message.answer("❌ Không tìm thấy khoá học này. Vui lòng thử lại!")
+            return
+
+        course = db.query(Course).filter(Course.course_id == first_lesson.course_id).first()
+        await callback.message.answer("🎉 Đăng ký thành công! Bắt đầu học thôi 🚀")
+        await _send_lesson_link(callback.message, first_lesson, course, db)
+
+    except Exception as e:
+        logger.error(f"Preset callback error slug={slug}: {e}", exc_info=True)
         await callback.message.answer("❌ Có lỗi xảy ra. Vui lòng thử lại!")
     finally:
         db.close()

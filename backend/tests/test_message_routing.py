@@ -81,49 +81,65 @@ class TestRoutingOnboarding:
     """User đang trong các bước onboarding."""
 
     @pytest.mark.asyncio
-    async def test_course_input_step_saves_course(self):
-        """State = course_input → nhận topic/URL → gọi detect_course_from_input."""
+    async def test_course_input_step_sends_q1(self):
+        """State = course_input → user nhập topic → update_onboarding_state được gọi với course_topic."""
         from app.routers.telegram_handlers import handle_text
 
         msg = make_message("Learn React from scratch")
 
         with patch("app.routers.telegram_handlers.SessionLocal") as mock_db_cls, \
-             patch("app.routers.telegram_handlers.OnboardingService") as mock_ob_cls:
+             patch("app.routers.telegram_handlers.OnboardingService") as mock_ob_cls, \
+             patch("app.routers.telegram_handlers.LLMService") as mock_llm_cls, \
+             patch("app.routers.telegram_handlers.LLMAssessmentGenerator") as mock_assessor_cls:
 
             mock_db = MagicMock()
             mock_db_cls.return_value = mock_db
+            mock_db.query.return_value.filter.return_value.first.return_value = None
 
             mock_ob = MagicMock()
             mock_ob_cls.return_value = mock_ob
             mock_ob.get_onboarding_state.return_value = make_onboarding_state("course_input")
-            mock_ob.detect_course_from_input.return_value = ("topic", "Learn React from scratch")
 
-            mock_db.query.return_value.filter.return_value.first.return_value = None
+            mock_llm = MagicMock()
+            mock_llm_cls.return_value = mock_llm
+            mock_llm.normalize_course_title.return_value = "React Fundamentals"
+
+            mock_assessor = MagicMock()
+            mock_assessor_cls.return_value = mock_assessor
+            mock_assessor.generate_assessment_questions.return_value = {
+                "q1": "Bạn đã build web app chưa?",
+                "q2_if_no": "Bạn có biết HTML/CSS không?",
+                "q2_if_yes": "Bạn đã dùng framework nào chưa?",
+            }
 
             await handle_text(msg)
 
-        mock_ob.detect_course_from_input.assert_called_once_with("Learn React from scratch")
-        reply = msg.answer.call_args[0][0]
-        # Phải hỏi Q1 tiếp theo
-        assert "web app" in reply.lower() or "q1" in reply.lower() or "xây dựng" in reply.lower()
+        # update_onboarding_state phải được gọi với course_topic
+        mock_ob.update_onboarding_state.assert_called()
+        call_kwargs = mock_ob.update_onboarding_state.call_args[1]
+        assert call_kwargs.get("course_topic") == "React Fundamentals"
+        assert call_kwargs.get("current_step") == "q1"
 
     @pytest.mark.asyncio
     async def test_q1_step_never_answer(self):
-        """State = q1, user trả lời 'chưa' → lưu q1=never, hỏi Q2 về HTML/CSS."""
+        """State = q1, user trả lời 'chưa' → lưu q1=never, current_step=q2."""
         from app.routers.telegram_handlers import handle_text
 
         msg = make_message("chưa bao giờ")
+        state = make_onboarding_state("q1")
+        state.q2_text_if_no = "Bạn có biết HTML/CSS không?"
+        state.q2_text_if_yes = "Bạn đã dùng framework nào?"
 
         with patch("app.routers.telegram_handlers.SessionLocal") as mock_db_cls, \
              patch("app.routers.telegram_handlers.OnboardingService") as mock_ob_cls:
 
             mock_db = MagicMock()
             mock_db_cls.return_value = mock_db
+            mock_db.query.return_value.filter.return_value.first.return_value = None
 
             mock_ob = MagicMock()
             mock_ob_cls.return_value = mock_ob
-            mock_ob.get_onboarding_state.return_value = make_onboarding_state("q1")
-            mock_db.query.return_value.filter.return_value.first.return_value = None
+            mock_ob.get_onboarding_state.return_value = state
 
             await handle_text(msg)
 
@@ -137,21 +153,24 @@ class TestRoutingOnboarding:
 
     @pytest.mark.asyncio
     async def test_q1_step_yes_answer(self):
-        """State = q1, user trả lời 'rồi' → lưu q1=yes, hỏi Q2 về framework."""
+        """State = q1, user trả lời 'rồi' → lưu q1=yes, current_step=q2."""
         from app.routers.telegram_handlers import handle_text
 
         msg = make_message("rồi, tôi đã build app")
+        state = make_onboarding_state("q1")
+        state.q2_text_if_no = "Bạn có biết HTML/CSS không?"
+        state.q2_text_if_yes = "Bạn đã dùng React hay framework nào chưa?"
 
         with patch("app.routers.telegram_handlers.SessionLocal") as mock_db_cls, \
              patch("app.routers.telegram_handlers.OnboardingService") as mock_ob_cls:
 
             mock_db = MagicMock()
             mock_db_cls.return_value = mock_db
+            mock_db.query.return_value.filter.return_value.first.return_value = None
 
             mock_ob = MagicMock()
             mock_ob_cls.return_value = mock_ob
-            mock_ob.get_onboarding_state.return_value = make_onboarding_state("q1")
-            mock_db.query.return_value.filter.return_value.first.return_value = None
+            mock_ob.get_onboarding_state.return_value = state
 
             await handle_text(msg)
 
@@ -244,50 +263,14 @@ class TestRoutingQuiz:
     """User đang trong active quiz session."""
 
     @pytest.mark.asyncio
-    async def test_text_during_quiz_routes_to_quiz_answer(self):
-        """Có active QuizSession → text bất kỳ → gọi QuizService.submit_answer."""
+    async def test_text_during_quiz_prompts_button_press(self):
+        """Có active QuizSession → text bất kỳ → nhắc nhấn nút, không gọi submit_answer."""
         from app.routers.telegram_handlers import handle_text
 
-        msg = make_message("useState là hook quản lý state trong React component")
+        msg = make_message("B")
 
         with patch("app.routers.telegram_handlers.SessionLocal") as mock_db_cls, \
-             patch("app.routers.telegram_handlers.OnboardingService") as mock_ob_cls, \
-             patch("app.routers.telegram_handlers.QuizService") as mock_quiz_cls:
-
-            mock_db = MagicMock()
-            mock_db_cls.return_value = mock_db
-
-            mock_ob = MagicMock()
-            mock_ob_cls.return_value = mock_ob
-            mock_ob.get_onboarding_state.return_value = None  # onboarding done
-
-            # Có active quiz session
-            mock_db.query.return_value.filter.return_value.first.return_value = make_quiz_session(session_id=42)
-
-            mock_quiz = MagicMock()
-            mock_quiz_cls.return_value = mock_quiz
-            mock_quiz.submit_answer.return_value = {
-                "evaluation": {"feedback": "Tốt lắm!", "is_correct": True},
-                "next_action": "continue",
-                "next_question": "Hãy giải thích useEffect?"
-            }
-
-            await handle_text(msg)
-
-        mock_quiz.submit_answer.assert_called_once()
-        call_args = mock_quiz.submit_answer.call_args
-        assert call_args[1]["session_id"] == 42 or call_args[0][0] == 42
-
-    @pytest.mark.asyncio
-    async def test_quiz_end_sends_summary(self):
-        """Quiz kết thúc (next_action=end) → gửi summary message."""
-        from app.routers.telegram_handlers import handle_text
-
-        msg = make_message("useEffect chạy sau mỗi render")
-
-        with patch("app.routers.telegram_handlers.SessionLocal") as mock_db_cls, \
-             patch("app.routers.telegram_handlers.OnboardingService") as mock_ob_cls, \
-             patch("app.routers.telegram_handlers.QuizService") as mock_quiz_cls:
+             patch("app.routers.telegram_handlers.OnboardingService") as mock_ob_cls:
 
             mock_db = MagicMock()
             mock_db_cls.return_value = mock_db
@@ -296,18 +279,21 @@ class TestRoutingQuiz:
             mock_ob_cls.return_value = mock_ob
             mock_ob.get_onboarding_state.return_value = None
 
-            mock_db.query.return_value.filter.return_value.first.return_value = make_quiz_session(42)
+            # First call: user found (truthy), second call: active quiz session
+            mock_user = MagicMock()
+            mock_user.user_id = 42
+            mock_user.checkin_pending = False
 
-            mock_quiz = MagicMock()
-            mock_quiz_cls.return_value = mock_quiz
-            mock_quiz.submit_answer.return_value = {
-                "evaluation": {"feedback": "Xuất sắc!", "is_correct": True},
-                "next_action": "end",
-                "summary": "Bạn đã nắm vững React Hooks!"
-            }
+            call_count = [0]
+            def side_effect():
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    return mock_user
+                return make_quiz_session(session_id=1)
+
+            mock_db.query.return_value.filter.return_value.first.side_effect = side_effect
 
             await handle_text(msg)
 
         reply = msg.answer.call_args[0][0]
-        # Phải có message tổng kết
-        assert any(word in reply.lower() for word in ["tổng kết", "summary", "hoàn thành", "mastered", "✅"])
+        assert "nút" in reply.lower() or "👆" in reply

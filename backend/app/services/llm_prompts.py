@@ -394,6 +394,56 @@ MÔ TẢ CỦA HỌC VIÊN: {checkin_text}
 Chỉ trả về nhận xét, không có phần mở đầu hay tiêu đề."""
 
     @staticmethod
+    def curriculum_from_url(url: str, page_text: str = "", num_lessons: int = 5) -> str:
+        """Generate a lesson curriculum based on a course URL and optional page text."""
+        content_section = (
+            f"\nNội dung trang (tóm tắt):\n{page_text[:2000]}\n"
+            if page_text.strip()
+            else "\n(Trang dùng JavaScript — không lấy được nội dung trực tiếp.)\n"
+        )
+        return f"""Bạn là chuyên gia thiết kế chương trình học.
+
+URL khoá học: {url}{content_section}
+Dựa vào URL và nội dung trên, hãy tạo chương trình học gồm {num_lessons} bài.
+
+Yêu cầu:
+- Tiêu đề mỗi bài cụ thể, mô tả đúng nội dung (không dùng "Bài 1", "Section N")
+- Progression tự nhiên: từ cơ bản đến nâng cao
+- Mô tả 1-2 câu cho mỗi bài
+- Bằng tiếng Việt
+
+Trả về JSON array:
+[
+  {{"sequence_number": 1, "title": "<tiêu đề>", "description": "<mô tả>"}},
+  ...
+]
+
+Chỉ trả về JSON array, không có text khác."""
+
+    @staticmethod
+    def concept_extraction(lesson_title: str, lesson_content: str) -> str:
+        """Extract key concepts from a lesson's markdown content."""
+        return f"""Trích xuất các khái niệm chính từ bài học sau.
+
+TIÊU ĐỀ BÀI: {lesson_title}
+
+NỘI DUNG:
+{lesson_content[:1500]}
+
+Yêu cầu:
+- Liệt kê 2-4 khái niệm quan trọng nhất trong bài
+- Mỗi khái niệm có tên ngắn gọn (1-4 từ) và mô tả 1 câu
+- Đây là các khái niệm sẽ dùng để tạo câu hỏi quiz
+
+Trả về JSON array:
+[
+  {{"name": "<tên khái niệm>", "description": "<mô tả ngắn>"}},
+  ...
+]
+
+Chỉ trả về JSON array, không có text khác."""
+
+    @staticmethod
     def suggest_next_courses(
         completed_course_name: str,
         user_level: int,
