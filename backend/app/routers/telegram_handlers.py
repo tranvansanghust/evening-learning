@@ -52,16 +52,23 @@ router = Router()
 _question_store = make_question_store(settings.redis_url)
 
 
-def _make_quiz_keyboard(session_id: int, question_id: str, list_answer: list) -> InlineKeyboardMarkup:
-    """Build inline keyboard with one button per answer choice."""
+def _format_quiz_message(question: str, list_answer: list) -> str:
+    """Format question with numbered choices as message text."""
     labels = ["A", "B", "C", "D"]
-    buttons = [
-        [InlineKeyboardButton(
-            text=f"{labels[i]}. {ans}",
+    choices = "\n".join(f"<b>{labels[i]}.</b> {ans}" for i, ans in enumerate(list_answer))
+    return f"{question}\n\n{choices}"
+
+
+def _make_quiz_keyboard(session_id: int, question_id: str, list_answer: list) -> InlineKeyboardMarkup:
+    """Build inline keyboard with A/B/C label buttons only (choices shown in message text)."""
+    labels = ["A", "B", "C", "D"]
+    buttons = [[
+        InlineKeyboardButton(
+            text=labels[i],
             callback_data=f"quiz:{session_id}:{question_id}:{i}",
-        )]
-        for i, ans in enumerate(list_answer)
-    ]
+        )
+        for i in range(len(list_answer))
+    ]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -860,8 +867,9 @@ async def _handle_checkin(
         )
 
     keyboard = _make_quiz_keyboard(result["session_id"], result["question_id"], result["list_answer"])
+    quiz_msg = _format_quiz_message(result["question"], result["list_answer"])
     await message.answer(
-        f"Quiz <b>{lesson.title}</b> bắt đầu! 📝\n\n{result['question']}",
+        f"Quiz <b>{lesson.title}</b> bắt đầu! 📝\n\n{quiz_msg}",
         parse_mode="HTML",
         reply_markup=keyboard,
     )
@@ -942,7 +950,8 @@ async def handle_quiz_callback(callback: CallbackQuery) -> None:
             next_list_answer = result.get("next_list_answer", [])
             if next_question and next_question_id:
                 keyboard = _make_quiz_keyboard(session_id, next_question_id, next_list_answer)
-                await callback.message.answer(next_question, reply_markup=keyboard)
+                quiz_msg = _format_quiz_message(next_question, next_list_answer)
+                await callback.message.answer(quiz_msg, parse_mode="HTML", reply_markup=keyboard)
 
     except ValueError as e:
         logger.error(f"Quiz callback error session={session_id}: {e}")
