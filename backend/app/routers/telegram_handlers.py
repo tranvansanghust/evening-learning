@@ -54,9 +54,12 @@ _question_store = make_question_store(settings.redis_url)
 
 def _format_quiz_message(question: str, list_answer: list) -> str:
     """Format question with numbered choices as message text."""
+    import html
     labels = ["A", "B", "C", "D"]
-    choices = "\n".join(f"<b>{labels[i]}.</b> {ans}" for i, ans in enumerate(list_answer))
-    return f"{question}\n\n{choices}"
+    choices = "\n".join(
+        f"<b>{labels[i]}.</b> {html.escape(str(ans))}" for i, ans in enumerate(list_answer)
+    )
+    return f"{html.escape(question)}\n\n{choices}"
 
 
 def _make_quiz_keyboard(session_id: int, question_id: str, list_answer: list) -> InlineKeyboardMarkup:
